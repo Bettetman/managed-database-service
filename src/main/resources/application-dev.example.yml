@@ -1,0 +1,50 @@
+# 公开配置模板：复制为 application-dev.yml 后由环境变量提供实际配置。
+spring:
+  datasource:
+    url: "${MANAGED_DATABASE_JDBC_URL}"
+    username: "${MANAGED_DATABASE_USERNAME}"
+    password: "${MANAGED_DATABASE_PASSWORD}"
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      pool-name: managed-database-control
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 10000
+      connection-init-sql: "SET SESSION time_zone = '+00:00', innodb_lock_wait_timeout = 10"
+      data-source-properties:
+        connectTimeout: 10000
+        socketTimeout: 10000
+        connectionTimeZone: UTC
+  sql:
+    init:
+      mode: never
+
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+
+managed-database:
+  id:
+    worker-id: ${MANAGED_DB_WORKER_ID:0}
+    datacenter-id: ${MANAGED_DB_DATACENTER_ID:0}
+  registration:
+    transaction-timeout-seconds: ${MANAGED_DB_TRANSACTION_TIMEOUT_SECONDS:10}
+  mount:
+    timeout-millis: ${MANAGED_DB_MOUNT_TIMEOUT_MILLIS:5000}
+    ssl-mode: ${MANAGED_DB_SSL_MODE:DISABLED}
+
+devagent-studio:
+  list:
+    - datasource-id: 1
+      host: "${MANAGED_DATABASE_MOUNT_1_HOST}"
+      db-name: "${MANAGED_DATABASE_MOUNT_1_DATABASE}"
+      port: "${MANAGED_DATABASE_MOUNT_1_PORT}"
+      username: "${MANAGED_DATABASE_MOUNT_1_USERNAME}"
+      password: "${MANAGED_DATABASE_MOUNT_1_PASSWORD}"
+    - datasource-id: 2
+      host: "${MANAGED_DATABASE_MOUNT_2_HOST}"
+      db-name: "${MANAGED_DATABASE_MOUNT_2_DATABASE}"
+      port: "${MANAGED_DATABASE_MOUNT_2_PORT}"
+      username: "${MANAGED_DATABASE_MOUNT_2_USERNAME}"
+      password: "${MANAGED_DATABASE_MOUNT_2_PASSWORD}"

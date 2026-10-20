@@ -1,0 +1,14 @@
+**/target/
+/.idea/
+*.iml
+.env
+.env.*
+!.env.example
+/config/application-local.yml
+*.log
+
+**/.DS_Store
+
+/.workbuddy/
+
+/src/main/resources/application-dev.yml

@@ -1,0 +1,36 @@
+server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
+  port: ${SERVER_PORT:8099}
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-binding-errors: never
+
+spring:
+  application:
+    name: managed-database-service
+  profiles:
+    default: dev
+  jackson:
+    time-zone: UTC
+    deserialization:
+      fail-on-trailing-tokens: true
+      fail-on-unknown-properties: true
+    serialization:
+      write-dates-as-timestamps: false
+
+logging:
+  level:
+    com.cmbchina.managedb: INFO
+    org.springframework.transaction.support.TransactionTemplate: OFF
+
+managed-database:
+  service-key: ${MANAGED_DATABASE_SERVICE_KEY:}
+  sql:
+    max-sql-bytes: ${MANAGED_DB_SQL_MAX_BYTES:65536}
+    max-check-tables: ${MANAGED_DB_CHECK_MAX_TABLES:200}
+    max-check-bytes: ${MANAGED_DB_CHECK_MAX_BYTES:4194304}
+    workers: ${MANAGED_DB_SQL_WORKERS:2}
+    execution-timeout-seconds: ${MANAGED_DB_SQL_TIMEOUT_SECONDS:30}
+    metadata-timeout-seconds: ${MANAGED_DB_METADATA_TIMEOUT_SECONDS:5}
+    network-timeout-millis: ${MANAGED_DB_SQL_NETWORK_TIMEOUT_MILLIS:35000}
