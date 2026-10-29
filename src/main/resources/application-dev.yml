@@ -1,0 +1,53 @@
+# dev 环境使用本地 Docker 数据库，连接及凭据取自用户提供的 .env.example。
+spring:
+  datasource:
+    url: "jdbc:mysql://127.0.0.1:3306/managed_database?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&sslMode=REQUIRED"
+    username: &database-username "root"
+    password: &database-password "Root@123456"
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      pool-name: managed-database-control
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 10000
+      connection-init-sql: "SET SESSION time_zone = '+00:00', innodb_lock_wait_timeout = 10"
+      data-source-properties:
+        connectTimeout: 10000
+        socketTimeout: 10000
+        connectionTimeZone: UTC
+  sql:
+    init:
+      mode: never
+
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+
+managed-database:
+  id:
+    # dev 单实例默认使用 0/0；多实例部署需为每个进程配置不同组合，各为 0～31。
+    worker-id: ${MANAGED_DB_WORKER_ID:0}
+    datacenter-id: ${MANAGED_DB_DATACENTER_ID:0}
+  registration:
+    transaction-timeout-seconds: ${MANAGED_DB_TRANSACTION_TIMEOUT_SECONDS:10}
+  mount:
+    timeout-millis: ${MANAGED_DB_MOUNT_TIMEOUT_MILLIS:5000}
+    # 当前为本地 Docker MySQL，挂载默认关闭 TLS，可通过环境变量覆盖。
+    ssl-mode: ${MANAGED_DB_SSL_MODE:DISABLED}
+
+# 管理库保留原 DB_URL；用户表挂载复用同一实例与账号，固定分配两个 Schema。
+devagent-studio:
+  list:
+    - datasource-id: 1
+      host: &database-host "127.0.0.1"
+      db-name: inner1
+      port: &database-port 3306
+      username: *database-username
+      password: *database-password
+    - datasource-id: 2
+      host: *database-host
+      db-name: inner2
+      port: *database-port
+      username: *database-username
+      password: *database-password
