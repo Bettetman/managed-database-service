@@ -48,28 +48,53 @@ public class TableOperationService {
         return new TableOperationReceipt(op.getId());
     }
     /** 工作线程只读取已保存的内容，不使用临时请求或重新分配位置。 */
-    private void run(String datasourceKey,long id){
+    void run(String datasourceKey,long id){
         TableOperation op=null;int index=0;
         try{
             op=repository.detail(datasourceKey,id).orElseThrow(()->new BizException(ResourceErrorCode.RESOURCE_NOT_FOUND));
             if(op.getStatus()!=TableOperation.Status.RUNNING||op.getSteps().stream().anyMatch(s->s.getStatus()!=TableOperation.StepStatus.PENDING))return;
             DatasourceResource resource=repository.checkContext(datasourceKey).getResource();resource.requireActive();if(resource.getDatasourceId()!=op.getDatasourceId()||!Long.valueOf(id).equals(resource.getActiveOperationId()))throw failure("RESOURCE_BUSY",false,false);
+            if(op.getMode()==TableOperation.Mode.CREATE_BATCH){
+                for(index=0;index<op.getTableNames().size();index++){
+                    String name=op.getTableNames().get(index);
+                    TableBinding binding=repository.binding(op.getDatasourceId(),name).orElseThrow(()->new BizException(ResourceErrorCode.TABLE_BINDING_CONFLICT));binding.requireOwner(datasourceKey,op.getDatasourceId());
+                    TableStructure expected=support.parse(op.getDatasourceId(),op.getBatchSqls().get(index)).getStructure();
+                    if(!name.equals(expected.getTableName()))throw failure("TABLE_BINDING_CONFLICT",false,false);
+                    support.requireReferences(datasourceKey,op.getDatasourceId(),expected);step(op,index,expected,false);
+                }
+                index=op.getSteps().size()-1;
+            }else{
             TableBinding binding=repository.binding(op.getDatasourceId(),op.getTableName()).orElseThrow(()->new BizException(ResourceErrorCode.TABLE_BINDING_CONFLICT));binding.requireOwner(datasourceKey,op.getDatasourceId());
             ParsedCreateTable parsed=support.parse(op.getDatasourceId(),op.getCreateSql());TableStructure expected=parsed.getStructure();
             if(!expected.getTableName().equals(op.getTableName()))throw failure("TABLE_BINDING_CONFLICT",false,false);
             support.requireReferences(datasourceKey,op.getDatasourceId(),expected);
             if(op.getMode()==TableOperation.Mode.REBUILD){step(op,0,expected,true);index=1;}
-            step(op,index,expected,false);op.finish(TableOperation.Status.SUCCEEDED,null);repository.finish(op);
+            step(op,index,expected,false);
+            }
+            op.finish(TableOperation.Status.SUCCEEDED,null);
+            if(op.getMode()==TableOperation.Mode.CREATE_BATCH)finishBatch(op);else repository.finish(op);
         }catch(Failure f){handleFailure(op,index,f);}
         catch(BizException e){handleFailure(op,index,failure(e.getErrorCode().getErrorCodeStr(),false,false));}
         catch(RuntimeException e){handleFailure(op,index,failure("EXECUTION_UNKNOWN",true,null));}
     }
+    /** 终态保存失败时从持久化快照登记未知；无法保存则保留最后证据和占用。 */
+    private void finishBatch(TableOperation op){
+        try{repository.finish(op);}catch(RuntimeException unavailable){
+            try{
+                TableOperation saved=repository.detail(op.getDatasourceKey(),op.getId()).orElseThrow(()->new BizException(ResourceErrorCode.RESOURCE_NOT_FOUND));
+                if(saved.getStatus()==TableOperation.Status.RUNNING){saved.finish(TableOperation.Status.UNKNOWN,"EXECUTION_UNKNOWN");repository.finish(saved);}
+            }catch(RuntimeException ignored){/* 不重发 SQL，不清除占用，等待人工核对。 */}
+        }
+    }
     /** 每步先保存 RUNNING，再发 SQL；发出后的回读失败按未知处理。 */
     private void step(TableOperation op,int index,TableStructure expected,boolean drop){
-        if(drop&&schemas.hasIncomingReferences(op.getDatasourceId(),op.getTableName()))throw failure("TABLE_BINDING_CONFLICT",false,false);
-        Optional<TableStructure> before=schemas.readTable(op.getDatasourceId(),op.getTableName());boolean execute;
+        String name=op.getMode()==TableOperation.Mode.CREATE_BATCH?op.getTableNames().get(index):op.getTableName();
+        String createSql=op.getMode()==TableOperation.Mode.CREATE_BATCH?op.getBatchSqls().get(index):op.getCreateSql();
+        boolean satisfied=op.getMode()==TableOperation.Mode.CREATE_BATCH?op.getBatchSatisfied().get(index):op.isExistingSatisfied();
+        if(drop&&schemas.hasIncomingReferences(op.getDatasourceId(),name))throw failure("TABLE_BINDING_CONFLICT",false,false);
+        Optional<TableStructure> before=schemas.readTable(op.getDatasourceId(),name);boolean execute;
         if(drop)execute=before.isPresent();
-        else if(op.isExistingSatisfied()){
+        else if(satisfied){
             if(!before.isPresent()||!comparator.compare(expected,before.get()).isEmpty())throw failure("STRUCTURE_MISMATCH",false,false);execute=false;
         }else{if(before.isPresent())throw failure("TABLE_BINDING_CONFLICT",false,false);execute=true;}
         op.markRunning(index);
@@ -79,12 +104,12 @@ public class TableOperationService {
         }catch(RuntimeException e){throw failure("EXECUTION_UNKNOWN",true,false);}
         SqlExecutionResult sql=null;
         if(execute){
-            try{sql=schemas.execute(op.getDatasourceId(),drop?"DROP TABLE `"+op.getTableName().replace("`","``")+"`":op.getCreateSql());}catch(RuntimeException e){throw failure("EXECUTION_UNKNOWN",true,null);}
+            try{sql=schemas.execute(op.getDatasourceId(),drop?"DROP TABLE `"+name.replace("`","``")+"`":createSql);}catch(RuntimeException e){throw failure("EXECUTION_UNKNOWN",true,null);}
             if(sql.getOutcome()==SqlExecutionResult.Outcome.UNKNOWN)throw failure("EXECUTION_UNKNOWN",true,null);
             if(sql.getOutcome()==SqlExecutionResult.Outcome.NOT_SENT)throw failure(sql.getErrorCode(),false,false);
         }
         Optional<TableStructure> after;
-        try{after=schemas.readTable(op.getDatasourceId(),op.getTableName());}catch(RuntimeException e){throw failure("EXECUTION_UNKNOWN",true,execute?Boolean.TRUE:Boolean.FALSE);}
+        try{after=schemas.readTable(op.getDatasourceId(),name);}catch(RuntimeException e){throw failure("EXECUTION_UNKNOWN",true,execute?Boolean.TRUE:Boolean.FALSE);}
         if(sql!=null&&sql.getOutcome()==SqlExecutionResult.Outcome.REJECTED)throw failure(sql.getErrorCode(),false,true);
         List<StructureDifference> differences=drop?Collections.emptyList():after.isPresent()?comparator.compare(expected,after.get()):Collections.emptyList();
         boolean success=drop?!after.isPresent():after.isPresent()&&differences.isEmpty();

@@ -13,7 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.transaction.*;
-import java.util.Collections;
+import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -198,6 +198,53 @@ class MybatisTableOperationRepositoryTest {
         assertEquals(TableOperation.StepStatus.UNKNOWN, restored.getSteps().get(0).getStatus());
         assertNull(restored.getFinishedAt());
         assertTrue(codec.result(restored).contains("manualResolution"));
+    }
+
+    /** 四目录与一个操作在同一事务认领，目录按固定名称顺序加锁。 */
+    @Test
+    void batchClaimsFourTablesInOneTransaction(){
+        TableOperation batch=batchOperation();repository.beginBatch(batch,Arrays.asList(null,null,null,null),0);
+        verify(tables,times(4)).insert(any());verify(operations,times(1)).insert(argThat(row->"CREATE_TABLE_BATCH".equals(row.getActionType())));verify(resources,times(1)).claim(APP,101L);verify(transactions,times(1)).commit(any());
+        org.mockito.InOrder order=inOrder(tables);for(String name:new TreeSet<>(batch.getTableNames()))order.verify(tables).lock(1L,name);
+    }
+    /** 预检后发生的操作和位置竞争必须回滚整批受理。 */
+    @Test
+    void batchRejectsConcurrentChangeAndRollsBack(){
+        when(operations.selectCount(any())).thenReturn(1L);
+        assertThrows(BizException.class,()->repository.beginBatch(batchOperation(),Arrays.asList(null,null,null,null),0));
+        verify(transactions).rollback(any());verify(tables,never()).insert(any());verify(resources,never()).claim(anyString(),anyLong());
+    }
+    /** 第三目录插入冲突时不得提交前两目录或受理记录。 */
+    @Test
+    void batchLocationConflictRollsBackAllRegistrations(){
+        when(tables.insert(any())).thenReturn(1,1).thenThrow(new DuplicateKeyException("占用"));
+        assertThrows(BizException.class,()->repository.beginBatch(batchOperation(),Arrays.asList(null,null,null,null),0));
+        verify(transactions).rollback(any());verify(transactions,never()).commit(any());verify(operations,never()).insert(any());
+    }
+    /** 批次步骤只更新对应目录，不把单表投影的空表名作为更新目标。 */
+    @Test
+    void batchStepUpdatesExactTable(){
+        TableOperation batch=batchOperation();application.setActiveOperationId(101L);
+        for(int i=0;i<batch.getTableNames().size();i++){
+            TableBindingPo row=new TableBindingPo();row.setId(201L+i);row.setDatasourceKey(APP);row.setDatasourceId(1L);row.setTableName(batch.getTableNames().get(i));row.setStatus("REGISTERED");row.setDeleted(0);when(tables.lock(1L,row.getTableName())).thenReturn(row);
+        }
+        batch.markRunning(0);batch.complete(0,TableOperation.StepStatus.SUCCEEDED,null,Collections.emptyMap());batch.markRunning(1);
+        stored.setActionType("CREATE_TABLE_BATCH");stored.setExecutionJson(codec.content(batch));stored.setExecutionResult(codec.result(batch));when(operations.lock(APP,101L)).thenReturn(stored);
+        batch.complete(1,TableOperation.StepStatus.SUCCEEDED,null,Collections.singletonMap("tableExists",true));repository.saveStep(batch,TableBinding.Status.CREATED);
+        verify(tables).updateById(argThat(row->Long.valueOf(202L).equals(row.getId())&&"CREATED".equals(row.getStatus())));verify(transactions).commit(any());
+    }
+    /** JSON 转义后超过存储上限时，在任何受理事务和目录写入前拒绝。 */
+    @Test
+    void batchChecksEncodedContentSizeBeforeTransaction(){
+        String huge=String.join("",Collections.nCopies(140000,"\\"));
+        TableOperation batch=TableOperation.startBatch(101L,APP,1L,Collections.singletonList("orders"),Collections.singletonList(huge),Collections.singletonList(false));
+        assertSame(ResourceErrorCode.INVALID_ARGUMENT,assertThrows(BizException.class,()->repository.beginBatch(batch,Collections.singletonList(null),0)).getErrorCode());
+        verifyNoInteractions(transactions);verify(tables,never()).insert(any());
+    }
+    /** 固定输入顺序与加锁顺序不同，便于发现步骤映射错误。 */
+    private TableOperation batchOperation(){
+        List<String> names=Arrays.asList("z_role","a_resource","m_binding","b_user");List<String> sqls=new ArrayList<>();for(String name:names)sqls.add("CREATE TABLE "+name+"(id bigint PRIMARY KEY)");
+        return TableOperation.startBatch(101L,APP,1L,names,sqls,Arrays.asList(false,false,false,false));
     }
 
 }

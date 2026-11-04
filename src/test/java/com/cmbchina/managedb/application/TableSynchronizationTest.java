@@ -27,6 +27,7 @@ class TableSynchronizationTest {
     private TableTaskDispatcher dispatcher;
     private TableTaskDispatcher.Reservation slot;
     private TableOperationService operations;
+    private BatchTableOperationService batches;
     private TableReadinessService readiness;
     private DatasourceResource resource;
     private TableOperation stored;
@@ -55,10 +56,19 @@ class TableSynchronizationTest {
             stored = copy(op); return null;
         }).when(repository).begin(any(), any());
         doAnswer(a -> {
+            TableOperation op=a.getArgument(0);resource.claim(op.getId());count++;
+            for(String name:op.getTableNames())bindings.putIfAbsent(name,new TableBinding(APP,1L,name,TableBinding.Status.REGISTERED,false));
+            stored=copy(op);return null;
+        }).when(repository).beginBatch(any(),anyList(),anyLong());
+        doAnswer(a -> {
             TableOperation op = a.getArgument(0); TableBinding.Status status = a.getArgument(1);
+            String target=op.getTableName();
+            if(op.getMode()==TableOperation.Mode.CREATE_BATCH){
+                for(int i=0;i<op.getSteps().size();i++)if(stored.getSteps().get(i).getStatus()!=op.getSteps().get(i).getStatus())target=op.getTableNames().get(i);
+            }
             stored = copy(op);
-            if (status == TableBinding.Status.CREATED) bindings.get(op.getTableName()).created();
-            if (status == TableBinding.Status.DROPPED) bindings.get(op.getTableName()).dropped();
+            if (status == TableBinding.Status.CREATED) bindings.get(target).created();
+            if (status == TableBinding.Status.DROPPED) bindings.get(target).dropped();
             return null;
         }).when(repository).saveStep(any(), any());
         doAnswer(a -> {
@@ -76,6 +86,7 @@ class TableSynchronizationTest {
         TableSqlSupport support = new TableSqlSupport(schemas, repository, settings);
         TableStructureComparator comparator = new TableStructureComparator();
         operations = new TableOperationService(repository, schemas, support, comparator, dispatcher);
+        batches = new BatchTableOperationService(repository,schemas,support,comparator,dispatcher,settings,operations);
         readiness = new TableReadinessService(repository, schemas, support, comparator, settings);
     }
 
@@ -83,7 +94,7 @@ class TableSynchronizationTest {
     private TableOperation copy(TableOperation op) {
         TableOperationPo row = new TableOperationPo();
         row.setId(op.getId()); row.setDatasourceKey(op.getDatasourceKey()); row.setDatasourceId(op.getDatasourceId());
-        row.setActionType(op.getMode() == TableOperation.Mode.CREATE ? "CREATE_TABLE" : "REBUILD_TABLE");
+        row.setActionType(TableOperationCodec.actionType(op.getMode()));
         row.setStatus(op.getStatus().name()); row.setCreatedAt(op.getCreatedAt());
         row.setExecutionJson(codec.content(op)); row.setExecutionResult(codec.result(op));
         return codec.restore(row);
@@ -95,7 +106,7 @@ class TableSynchronizationTest {
         else {
             if (unknownCreate) return new SqlExecutionResult(SqlExecutionResult.Outcome.UNKNOWN, "EXECUTION_UNKNOWN");
             if (rejectCreate) return new SqlExecutionResult(SqlExecutionResult.Outcome.REJECTED, "SQL_EXECUTION_FAILED");
-            physical.put("orders", parser.parse(sql).getStructure());
+            TableStructure structure=parser.parse(sql).getStructure();physical.put(structure.getTableName(), structure);
         }
         return new SqlExecutionResult(SqlExecutionResult.Outcome.ACKNOWLEDGED, null);
     }
@@ -399,6 +410,86 @@ class TableSynchronizationTest {
         assertEquals(TableOperation.StepStatus.SUCCEEDED, stored.getSteps().get(0).getStatus());
         assertEquals(TableBinding.Status.DROPPED, bindings.get("orders").getStatus());
         assertNull(resource.getActiveOperationId());
+    }
+
+    /** 通用批次使用四张不同权限表，成功后仍以真实结构检查作门禁。 */
+    @Test
+    void batchCreatesFourTablesAndProjectsNames(){
+        List<String> sqls=batchSqls();batches.submit(APP,"CREATE",sqls);
+        assertEquals(TableOperation.Status.SUCCEEDED,stored.getStatus());assertEquals(4,physical.size());assertNull(resource.getActiveOperationId());
+        assertTrue(readiness.check(APP,sqls).isReady());
+        assertEquals(APP+"_role",operations.detail(APP,101L).getExecutionResult().getSteps().get(0).getTableName());
+        for(String name:stored.getTableNames())assertEquals(TableBinding.Status.CREATED,bindings.get(name).getStatus());
+        org.mockito.InOrder order=inOrder(schemas);for(String sql:sqls)order.verify(schemas).execute(1L,sql);
+    }
+    /** 第三条预检错误时前两条没有物理或管理表副作用。 */
+    @Test
+    void batchPreflightsEntireManifest(){
+        List<String> sqls=batchSqls();sqls.set(2,"CREATE TABLE broken(id bigint)");
+        assertThrows(BizException.class,()->batches.submit(APP,"CREATE",sqls));
+        verify(repository,never()).beginBatch(any(),anyList(),anyLong());verifyNoInteractions(dispatcher);assertTrue(physical.isEmpty());
+    }
+    /** 明确拒绝第三表时保留前两表，后续仍待执行；重新申请仅补建缺表。 */
+    @Test
+    void batchFailurePreservesSuccessAndNewRequestCompletesMissingTables(){
+        List<String> sqls=batchSqls();when(schemas.execute(1L,sqls.get(2))).thenReturn(new SqlExecutionResult(SqlExecutionResult.Outcome.REJECTED,"SQL_EXECUTION_FAILED"));
+        batches.submit(APP,"CREATE",sqls);
+        assertEquals(TableOperation.Status.FAILED,stored.getStatus());assertEquals(2,physical.size());assertNull(resource.getActiveOperationId());
+        assertEquals(TableOperation.StepStatus.FAILED,stored.getSteps().get(2).getStatus());assertEquals(TableOperation.StepStatus.PENDING,stored.getSteps().get(3).getStatus());
+        when(schemas.execute(1L,sqls.get(2))).thenAnswer(a->execute(a.getArgument(1)));batches.submit(APP,"CREATE",sqls);
+        assertEquals(TableOperation.Status.SUCCEEDED,stored.getStatus());assertEquals(4,physical.size());
+        verify(schemas,times(1)).execute(1L,sqls.get(0));verify(schemas,times(1)).execute(1L,sqls.get(1));
+    }
+    /** 未知阻断后续、重复调度和新请求，不重发任何 SQL。 */
+    @Test
+    void batchUnknownRetainsOccupancyAndNeverReplays(){
+        unknownCreate=true;batches.submit(APP,"CREATE",batchSqls());
+        assertEquals(TableOperation.Status.UNKNOWN,stored.getStatus());assertNotNull(resource.getActiveOperationId());assertNull(stored.getFinishedAt());
+        assertEquals(TableOperation.StepStatus.UNKNOWN,stored.getSteps().get(0).getStatus());assertEquals(TableOperation.StepStatus.PENDING,stored.getSteps().get(1).getStatus());
+        dispatched.run();operations.detail(APP,101L);assertThrows(BizException.class,()->batches.submit(APP,"CREATE",batchSqls()));verify(schemas,times(1)).execute(anyLong(),anyString());
+    }
+    /** 规范化重复、目录外表、非法模式和边界均在受理前拒绝。 */
+    @Test
+    void batchRejectsUnsafeInputs(){
+        for(String mode:Arrays.asList("REBUILD","CREATE_BATCH",null))assertThrows(BizException.class,()->batches.submit(APP,mode,batchSqls()));
+        for(List<String> sqls:Arrays.asList(Collections.<String>emptyList(),Arrays.asList(SQL,SQL.replace("orders","Orders")),Collections.nCopies(51,SQL),Arrays.asList(SQL,"DROP TABLE orders"),Arrays.asList(SQL,"INSERT INTO orders VALUES(1)"),Arrays.asList(SQL,SQL+"; DROP TABLE orders"),Collections.singletonList("CREATE TABLE IF NOT EXISTS orders(id bigint PRIMARY KEY)"),Arrays.asList(SQL,""),Arrays.asList(SQL,null)))assertThrows(BizException.class,()->batches.submit(APP,"CREATE",sqls));
+        physical.put("orders",parser.parse(SQL).getStructure());assertThrows(BizException.class,()->batches.submit(APP,"CREATE",Collections.singletonList(SQL)));
+        verify(repository,never()).beginBatch(any(),anyList(),anyLong());verify(schemas,never()).execute(anyLong(),anyString());
+    }
+    /** 批次受现有检查上限、单条字节和总 UTF-8 字节共同约束。 */
+    @Test
+    void batchEnforcesByteAndCountLimits(){
+        TableSyncSettings settings=new TableSyncSettings(65536,2,4194304);
+        assertThrows(BizException.class,()->settings.validateBatch(Collections.nCopies(3,SQL)));
+        String large=String.join("",Collections.nCopies(65536,"x"));
+        assertThrows(BizException.class,()->settings.validateBatch(Collections.singletonList(large+"x")));
+        assertThrows(BizException.class,()->new TableSyncSettings(65536,200,4194304).validateBatch(Collections.nCopies(4,large)));
+        assertThrows(BizException.class,()->settings.validateBatch(Collections.singletonList(String.join("",Collections.nCopies(22000,"中")))));
+    }
+    /** 资源占用和调度容量失败都不会登记批次；拒绝转交则明确结束原操作。 */
+    @Test
+    void batchHonorsOccupancyCapacityAndDispatchFailure(){
+        resource.claim(999L);assertThrows(BizException.class,()->batches.submit(APP,"CREATE",batchSqls()));resource.releaseOperation(999L);
+        when(dispatcher.reserve()).thenThrow(new BizException(ResourceErrorCode.EXECUTION_CAPACITY_EXHAUSTED));assertThrows(BizException.class,()->batches.submit(APP,"CREATE",batchSqls()));
+        verify(repository,never()).beginBatch(any(),anyList(),anyLong());
+        doReturn(slot).when(dispatcher).reserve();doThrow(new BizException(ResourceErrorCode.EXECUTION_CAPACITY_EXHAUSTED)).when(slot).dispatch(any());
+        assertThrows(BizException.class,()->batches.submit(APP,"CREATE",batchSqls()));assertEquals(TableOperation.Status.FAILED,stored.getStatus());assertNull(resource.getActiveOperationId());verify(schemas,never()).execute(anyLong(),anyString());
+    }
+    /** 新表外键目标即使列在同批次前方，也不在预检中假定已建成。 */
+    @Test
+    void batchRejectsReferencesToNewBatchTables(){
+        List<String> sqls=Arrays.asList("CREATE TABLE parent(id bigint PRIMARY KEY)","CREATE TABLE child(id bigint PRIMARY KEY,parent_id bigint,FOREIGN KEY(parent_id) REFERENCES parent(id))");
+        assertThrows(BizException.class,()->batches.submit(APP,"CREATE",sqls));verify(repository,never()).beginBatch(any(),anyList(),anyLong());
+    }
+    /** 结果保存失败必须保留未知占用，后续表不会执行。 */
+    @Test
+    void batchPersistenceFailureStopsFollowingTables(){
+        doAnswer(a->{if(a.getArgument(1)!=null)throw new BizException(ResourceErrorCode.INTERNAL_ERROR);stored=copy(a.getArgument(0));return null;}).when(repository).saveStep(any(),any());
+        batches.submit(APP,"CREATE",batchSqls());assertEquals(TableOperation.Status.UNKNOWN,stored.getStatus());assertNotNull(resource.getActiveOperationId());verify(schemas,times(1)).execute(anyLong(),anyString());
+    }
+    /** 生成四张有明确前缀和主键的权限测试表，不依赖真实业务模板。 */
+    private List<String> batchSqls(){
+        List<String> result=new ArrayList<>();for(String name:Arrays.asList("role","resource","role_resource","user_role"))result.add("CREATE TABLE `"+APP+"_"+name+"`(id bigint NOT NULL, PRIMARY KEY(id))");return result;
     }
 
 }

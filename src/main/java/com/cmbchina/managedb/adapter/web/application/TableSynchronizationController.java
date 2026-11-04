@@ -1,6 +1,7 @@
 package com.cmbchina.managedb.adapter.web.application;
 
 import com.cmbchina.managedb.adapter.web.request.CheckRequest;
+import com.cmbchina.managedb.adapter.web.request.BatchOperationRequest;
 import com.cmbchina.managedb.adapter.web.request.OperationRequest;
 import com.cmbchina.managedb.application.*;
 import com.cmbchina.managedb.application.view.*;
@@ -16,9 +17,13 @@ import java.util.List;
 public class TableSynchronizationController {
     private final TableOperationService operations;
     private final TableReadinessService readiness;
+    private final BatchTableOperationService batches;
     /** 受理创建或明确授权的数据丢弃重建。 */
     @PostMapping(value="/table-operations",consumes=MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<TableOperationReceipt> submit(@PathVariable String datasourceKey,@RequestBody OperationRequest request){return ResponseEntity.status(HttpStatus.ACCEPTED).body(operations.submit(datasourceKey,request.getMode(),request.getSql(),Boolean.TRUE.equals(request.getAllowDataLoss())));}
+    /** 全批次预检后返回统一异步回执；202 不代表物理表已建成。 */
+    @PostMapping(value="/table-operations/batch",consumes=MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<TableOperationReceipt> batch(@PathVariable String datasourceKey,@RequestBody BatchOperationRequest request){return ResponseEntity.status(HttpStatus.ACCEPTED).body(batches.submit(datasourceKey,request.getMode(),request.getSqls()));}
     /** 查询原记录，不触发重放。 */
     @GetMapping("/table-operations/{operationId}")
     public TableOperationView detail(@PathVariable String datasourceKey,@PathVariable long operationId){return operations.detail(datasourceKey,operationId);}

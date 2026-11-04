@@ -66,6 +66,7 @@ flowchart LR
 | --- | --- |
 | GET /health | 进程健康，不检查业务表结构 |
 | POST /managed-database/datasources | 注册资源，成功返回 HTTP 201 |
+| POST {前缀}/table-operations/batch | 有序批量 CREATE，受理返回 HTTP 202 和统一 operationId |
 | POST {前缀}/table-operations | CREATE 或 REBUILD，受理返回 HTTP 202 和 operationId |
 | GET {前缀}/table-operations/{operationId} | 查询原操作详情 |
 | GET {前缀}/table-operations | 查询最近操作历史 |
@@ -97,6 +98,8 @@ appName 必填，1～255 个字符；appKey 可选，提供时为 1～64 个字�
 AG-UI 入口采用 RunAgentInput，业务参数放 forwardedProps，返回完整生命周期、结构化结果或错误，以及状态快照。HTTP 200 或 RUN_FINISHED 不等于业务执行成功。
 
 ## 建表、重建与结构检查
+
+批量 CREATE 的请求、限制和逐表结果见 [批量接口合同](managed-database-batch-create-api.md)。批次全量预检后一次认领资源，按输入顺序执行，任一步失败立即停止后续步骤；UNKNOWN 保留占用且禁止重放。
 
 CREATE 只创建缺失表。已有归属表且结构一致时可以返回目标已满足；结构不同则提示重建，不自动 ALTER 或 DROP。目录外同名表或其他资源占用的表明确拒绝。
 

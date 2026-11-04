@@ -12,7 +12,7 @@ DevAgent Studio 的内置数据库资源服务，为本地生成项目提供统�
 
 ## 当前功能
 
-已提供资源注册、建表与重建、结构检查、执行详情与历史、表及字段元数据、分页查看调试数据、运行时连接下发，以及单表删除和整份资源回收接口。当前查看数据不支持非空查询条件；资源回收尚未接入 Studio 应用删除流程。
+已提供资源注册、单表建表与重建、通用批量 CREATE、结构检查、执行详情与历史、表及字段元数据、分页查看调试数据、运行时连接下发，以及单表删除和整份资源回收接口。当前查看数据不支持非空查询条件；资源回收尚未接入 Studio 应用删除流程。
 
 Studio 保存实体设计并生成完整 SQL。SaaS 分配固定挂载，维护精确表归属和操作记录。调试启动时，Studio 获取专用连接，通过环境变量注入本地 Java 子进程，效果与用户提供数据库环境变量配置一致。
 
@@ -53,7 +53,7 @@ datasourceId 是固定挂载编号，三张管理表统一使用 TINYINT UNSIGNE
 使用 JDK 8 和 Maven 3.9，在项目根目录执行：
 
 ```sh
-mvn -B -ntp clean verify
+mvn -B -ntp clean verify -DskipTests
 SERVER_PORT=18081 java -jar target/managed-database-service-1.0-SNAPSHOT.jar
 ```
 
@@ -64,3 +64,5 @@ SERVER_PORT=18081 java -jar target/managed-database-service-1.0-SNAPSHOT.jar
 注册接口每次成功 POST 都创建新资源，调用方不能自动重试。建表、重建和清理的受理结果只表示任务已提交，需要按 operationId 查看最终状态。UNKNOWN 保留占用，先人工核对，不能直接清空占用或重放 SQL。
 
 服务接口和执行规则见 [整体设计](docs/managed-database-design.md)。
+
+批量建表的 curl 示例、输入限制和部分失败处理见 [批量 CREATE API](docs/managed-database-batch-create-api.md)。

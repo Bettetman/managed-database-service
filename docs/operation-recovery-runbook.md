@@ -1,6 +1,6 @@
 # 未完成操作人工处置
 
-适用当前 datasourceKey 模型及 CREATE_TABLE、REBUILD_TABLE、DROP_TABLE、RELEASE_DATASOURCE。仅处理 RUNNING / UNKNOWN 原操作，不重放 SQL、不恢复数据、不根据超时直接释放。
+适用当前 datasourceKey 模型及 CREATE_TABLE、CREATE_TABLE_BATCH、REBUILD_TABLE、DROP_TABLE、RELEASE_DATASOURCE。仅处理 RUNNING / UNKNOWN 原操作，不重放 SQL、不恢复数据、不根据超时直接释放。
 
 用户 recovery 只登记停止意图。无法由正常工作线程确认结束的操作，由运维执行本流程；最终结果仍通过原操作详情或 recovery 的 STATUS 展示，无须另建产品强制释放接口。
 
@@ -95,6 +95,8 @@ CALL md_abandon_database_operation(
 
 服务不会自动安装或调用此工具，不通过定时任务、超时、重启或用户确认直接释放未知占用。SQL 中的两个确认标记是运维签署结果，不能替代原目标执行结束的证据。
 
-仓库测试只验证人工结果合同与现有 Codec、详情状态及审计脱敏的兼容性，不连接实库，不验证存储过程语法、锁竞争和数据库回滚。部署人员须在其 MySQL 8.0 非生产环境中审阅并预演：四种动作、空 RELEASE、遗漏/重复/额外表、错误布尔类型、归属与占用冲突、默认回滚、正式提交、部分写入失败回滚、以及新操作占用期间重复调用。没有完成实库验证前，不把测试通过等同于工具已完成数据库联调。
+仓库测试只验证人工结果合同与现有 Codec、详情状态及审计脱敏的兼容性，不连接实库，不验证存储过程语法、锁竞争和数据库回滚。部署人员须在其 MySQL 8.0 非生产环境中审阅并预演：五种动作（含批量 CREATE）、空 RELEASE、遗漏/重复/额外表、错误布尔类型、归属与占用冲突、默认回滚、正式提交、部分写入失败回滚、以及新操作占用期间重复调用。没有完成实库验证前，不把测试通过等同于工具已完成数据库联调。
 
 MySQL 语法依据：[存储过程](https://dev.mysql.com/doc/refman/8.0/en/create-procedure.html)、[JSON 函数](https://dev.mysql.com/doc/refman/8.0/en/json-functions.html)、[SIGNAL](https://dev.mysql.com/doc/refman/8.0/en/signal.html)。
+
+批量 CREATE 的原清单为 1～50 张表，每张对应一个步骤，人工核对必须覆盖完整冻结清单，包括尚未执行的 PENDING 目标。先更新部署中的处置存储过程，使其识别 CREATE_TABLE_BATCH；处置不自动重放批次，不删除已成功的表。

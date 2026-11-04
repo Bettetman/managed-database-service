@@ -88,7 +88,7 @@ procedure_body: BEGIN
     SET v_snapshot_result = v_result;
     IF v_resource_datasource <> p_datasource_id OR v_operation_datasource <> p_datasource_id
        OR v_resource_deleted <> 0 OR v_operation_deleted <> 0
-       OR v_action NOT IN ('CREATE_TABLE', 'REBUILD_TABLE', 'DROP_TABLE', 'RELEASE_DATASOURCE')
+       OR v_action NOT IN ('CREATE_TABLE', 'CREATE_TABLE_BATCH', 'REBUILD_TABLE', 'DROP_TABLE', 'RELEASE_DATASOURCE')
        OR NOT (JSON_TYPE(v_content) <=> 'OBJECT') OR NOT (JSON_TYPE(v_result) <=> 'OBJECT') THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '资源归属、挂载、有效性或操作内容不符合当前合同';
     END IF;
@@ -116,8 +116,10 @@ procedure_body: BEGIN
     END IF;
     SET v_count = JSON_LENGTH(v_names);
     SET v_steps = CASE v_action WHEN 'REBUILD_TABLE' THEN 2
+                  WHEN 'CREATE_TABLE_BATCH' THEN v_count
                   WHEN 'RELEASE_DATASOURCE' THEN GREATEST(1, v_count) ELSE 1 END;
-    IF v_count > 200 OR (v_action <> 'RELEASE_DATASOURCE' AND v_count <> 1)
+    IF v_count > 200 OR (v_action NOT IN ('RELEASE_DATASOURCE', 'CREATE_TABLE_BATCH') AND v_count <> 1)
+       OR (v_action = 'CREATE_TABLE_BATCH' AND v_count NOT BETWEEN 1 AND 50)
        OR JSON_LENGTH(JSON_EXTRACT(v_result, '$.steps')) <> v_steps
        OR JSON_LENGTH(p_observed_tables) <> v_count THEN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '原清单、步骤数量或逐表核对数量不匹配';

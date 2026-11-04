@@ -25,14 +25,16 @@ class TableSynchronizationControllerTest {
     private static final String BASE = "/managed-database/datasources/b0ddb23acc91";
     private TableOperationService operations;
     private TableReadinessService readiness;
+    private BatchTableOperationService batches;
     private MockMvc mvc;
 
     /** 装配真实鉴权和异常过滤，密钥仅在测试中使用。 */
     @BeforeEach
     void setUp() {
         operations = mock(TableOperationService.class); readiness = mock(TableReadinessService.class);
+        batches = mock(BatchTableOperationService.class);
         ObjectMapper mapper = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
-        mvc = MockMvcBuilders.standaloneSetup(new TableSynchronizationController(operations, readiness))
+        mvc = MockMvcBuilders.standaloneSetup(new TableSynchronizationController(operations, readiness, batches))
                 .setControllerAdvice(new BaseExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(mapper))
                 .addFilters(new ServiceKeyFilter("test-only-key", mapper)).build();
@@ -100,6 +102,26 @@ class TableSynchronizationControllerTest {
         verifyNoInteractions(operations);
     }
 
+    /** 批次复用鉴权和字符串操作编号，旧路径合同仍由原测试覆盖。 */
+    @Test
+    void acceptsBatchAndRequiresAuthentication() throws Exception {
+        when(batches.submit("b0ddb23acc91","CREATE",Collections.singletonList("sql"))).thenReturn(new TableOperationReceipt(102L));
+        mvc.perform(request("/table-operations/batch","{\"mode\":\"CREATE\",\"sqls\":[\"sql\"]}"))
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.operationId").value("102")).andExpect(jsonPath("$.status").value("RUNNING"));
+        mvc.perform(post(BASE+"/table-operations/batch").servletPath(BASE+"/table-operations/batch").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isUnauthorized());
+    }
+    /** 即使全局允许未知字段，本入口仍拒绝别名、额外参数和隐式类型转换。 */
+    @Test
+    void rejectsMalformedBatchWithoutCallingUseCase() throws Exception {
+        ObjectMapper mapper=new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        MockMvc strict=MockMvcBuilders.standaloneSetup(new TableSynchronizationController(operations,readiness,batches))
+                .setControllerAdvice(new BaseExceptionHandler()).setMessageConverters(new MappingJackson2HttpMessageConverter(mapper)).build();
+        for(String body:new String[]{"{}","{\"mode\":3,\"sqls\":[]}","{\"mode\":\"CREATE\",\"sqls\":[3]}","{\"mode\":\"CREATE\",\"sqls\":[null]}","{\"mode\":\"CREATE\",\"sqls\":\"sql\"}","{\"mode\":\"CREATE\",\"sqls\":[],\"schema\":\"x\"}"}){
+            strict.perform(request("/table-operations/batch",body)).andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_ARGUMENT"));
+        }
+        verifyNoInteractions(batches);
+    }
     /** 设置实际 Servlet 路径并复用 JSON 和测试密钥。 */
     private static MockHttpServletRequestBuilder request(String suffix, String body) {
         return post(BASE + suffix).servletPath(BASE + suffix).header("Authorization", "Bearer test-only-key")

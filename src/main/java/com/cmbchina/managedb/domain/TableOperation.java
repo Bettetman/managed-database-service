@@ -8,7 +8,7 @@ import java.util.*;
 /** 一次按钮操作及逐步执行事实，不能把未知或失败记录重置后重跑。 */
 @Getter
 public final class TableOperation {
-    public enum Mode{CREATE,REBUILD,DROP,RELEASE}
+    public enum Mode{CREATE_BATCH,CREATE,REBUILD,DROP,RELEASE}
     public enum Status{RUNNING,SUCCEEDED,FAILED,UNKNOWN}
     public enum StepStatus{PENDING,RUNNING,SUCCEEDED,FAILED,UNKNOWN}
     private final long id,datasourceId;
@@ -16,6 +16,8 @@ public final class TableOperation {
     private final Mode mode;
     private final List<String> tableNames;
     private final boolean existingSatisfied;
+    private List<String> batchSqls=Collections.emptyList();
+    private List<Boolean> batchSatisfied=Collections.emptyList();
     private final Instant createdAt;
     private final List<Step> steps;
     private Status status;
@@ -58,6 +60,18 @@ public final class TableOperation {
             throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);
         return new TableOperation(id,datasourceKey,datasourceId,mode==Mode.DROP?names.get(0):"","",mode,false,
                 createdAt,status,steps,startedAt,finishedAt,errorCode,errorSummary,abandonRequest,manualResolution,names);
+    }
+    /** 创建有序批次，逐表状态与原 SQL 一并冻结。 */
+    public static TableOperation startBatch(long id,String key,long datasourceId,List<String> names,List<String> sqls,List<Boolean> satisfied){
+        List<Step> steps=new ArrayList<>();for(int i=0;i<names.size();i++)steps.add(Step.pending(i+1));
+        return restoreBatch(id,key,datasourceId,names,sqls,satisfied,Instant.now(),Status.RUNNING,steps,null,null,null,null,null,Collections.emptyMap());
+    }
+    /** 恢复批次原始目标和证据，不重新生成步骤。 */
+    public static TableOperation restoreBatch(long id,String key,long datasourceId,List<String> names,List<String> sqls,List<Boolean> satisfied,Instant createdAt,Status status,List<Step> steps,Instant startedAt,Instant finishedAt,String code,String summary,OperationAbandonRequest abandon,Map<String,Object> resolution){
+        if(names==null||names.isEmpty()||names.size()>50||names.size()!=sqls.size()||names.size()!=satisfied.size()||names.size()!=steps.size()||new HashSet<>(names).size()!=names.size())throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);
+        for(int i=0;i<names.size();i++)if(names.get(i)==null||names.get(i).isEmpty()||names.get(i).length()>64||names.get(i).indexOf('\0')>=0||sqls.get(i)==null||sqls.get(i).trim().isEmpty()||satisfied.get(i)==null||steps.get(i).getSequence()!=i+1)throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);
+        TableOperation op=new TableOperation(id,key,datasourceId,"","",Mode.CREATE_BATCH,false,createdAt,status,steps,startedAt,finishedAt,code,summary,abandon,resolution,names);
+        op.batchSqls=Collections.unmodifiableList(new ArrayList<>(sqls));op.batchSatisfied=Collections.unmodifiableList(new ArrayList<>(satisfied));return op;
     }
     /** 放弃只登记意图；重复申请保留首次审计，不擅自清占用。 */
     public void requestAbandon(String reason){

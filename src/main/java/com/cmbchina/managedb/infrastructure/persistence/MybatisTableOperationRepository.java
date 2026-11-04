@@ -32,13 +32,13 @@ public final class MybatisTableOperationRepository implements TableOperationRepo
     /** 每次读取使用新快照，检查前后读取才能发现期间提交。 */
     private static TransactionTemplate template(PlatformTransactionManager manager,int seconds,boolean readonly){TransactionTemplate t=new TransactionTemplate(manager);t.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);t.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);t.setTimeout(seconds);t.setReadOnly(readonly);return t;}
     /** 统一事务后翻译异常，冲突不触发目标 SQL 重放。 */
-    private <T>T tx(TransactionTemplate template,Supplier<T> action){try{return template.execute(s->action.get());}catch(BizException e){throw e;}catch(DuplicateKeyException e){throw new BizException(ResourceErrorCode.TABLE_BINDING_CONFLICT);}catch(RuntimeException e){throw new BizException(ResourceErrorCode.INTERNAL_ERROR);}}
+    private <T>T tx(String stage,TransactionTemplate template,Supplier<T> action){try{return template.execute(s->action.get());}catch(BizException e){throw e;}catch(DuplicateKeyException e){throw new BizException(ResourceErrorCode.TABLE_BINDING_CONFLICT);}catch(RuntimeException e){PersistenceDiagnostics.failure(stage,null,e);throw new BizException(ResourceErrorCode.INTERNAL_ERROR);}}
     /** 服务统一主键生成。 */
     @Override
     public long nextId(){return ids.nextId(null).longValue();}
     /** 申请与执行准入串行；终态重复申请只返回原结果，不释放后来操作的占用。 */
     @Override
-    public TableOperation requestAbandon(String datasourceKey,long operationId,String reason){return tx(write,()->{
+    public TableOperation requestAbandon(String datasourceKey,long operationId,String reason){return tx("repository.requestAbandon",write,()->{
         DatasourceResource resource=application(resources.lock(datasourceKey));resource.requireActive();
         TableOperationPo row=operations.lock(datasourceKey,operationId);if(row==null)throw new BizException(ResourceErrorCode.RESOURCE_NOT_FOUND);
         TableOperation op=codec.restore(row);
@@ -56,21 +56,21 @@ public final class MybatisTableOperationRepository implements TableOperationRepo
     private static TableBinding table(TableBindingPo row){return new TableBinding(row.getDatasourceKey(),row.getDatasourceId(),row.getTableName(),TableBinding.Status.valueOf(row.getStatus()),Integer.valueOf(1).equals(row.getDeleted()));}
     /** 资源与操作数在同一快照读取，计数包含全部保留记录。 */
     @Override
-    public CheckContext checkContext(String datasourceKey){return tx(read,()->new CheckContext(application(resources.selectOne(Wrappers.<DatasourceRegistrationPo>lambdaQuery().eq(DatasourceRegistrationPo::getDatasourceKey,datasourceKey))),operations.selectCount(Wrappers.<TableOperationPo>lambdaQuery().eq(TableOperationPo::getDatasourceKey,datasourceKey))));}
+    public CheckContext checkContext(String datasourceKey){return tx("repository.checkContext",read,()->new CheckContext(application(resources.selectOne(Wrappers.<DatasourceRegistrationPo>lambdaQuery().eq(DatasourceRegistrationPo::getDatasourceKey,datasourceKey))),operations.selectCount(Wrappers.<TableOperationPo>lambdaQuery().eq(TableOperationPo::getDatasourceKey,datasourceKey))));}
     /** 精确位置查询不隐式过滤软删除。 */
     @Override
-    public Optional<TableBinding> binding(long datasourceId,String name){return tx(read,()->Optional.ofNullable(tables.selectOne(Wrappers.<TableBindingPo>lambdaQuery().eq(TableBindingPo::getDatasourceId,datasourceId).eq(TableBindingPo::getTableName,name))).map(MybatisTableOperationRepository::table));}
+    public Optional<TableBinding> binding(long datasourceId,String name){return tx("repository.binding",read,()->Optional.ofNullable(tables.selectOne(Wrappers.<TableBindingPo>lambdaQuery().eq(TableBindingPo::getDatasourceId,datasourceId).eq(TableBindingPo::getTableName,name))).map(MybatisTableOperationRepository::table));}
     /** 额外表清单只读取本应用有效目录。 */
     @Override
-    public List<TableBinding> bindings(String datasourceKey){return tx(read,()->tables.selectList(Wrappers.<TableBindingPo>lambdaQuery().eq(TableBindingPo::getDatasourceKey,datasourceKey).eq(TableBindingPo::getDeleted,0)).stream().map(MybatisTableOperationRepository::table).collect(Collectors.toList()));}
+    public List<TableBinding> bindings(String datasourceKey){return tx("repository.bindings",read,()->tables.selectList(Wrappers.<TableBindingPo>lambdaQuery().eq(TableBindingPo::getDatasourceKey,datasourceKey).eq(TableBindingPo::getDeleted,0)).stream().map(MybatisTableOperationRepository::table).collect(Collectors.toList()));}
     /** 清理包含全部保留目录；异常软删归属由应用层明确拒绝，不能静默跳过。 */
     @Override
-    public List<TableBinding> cleanupBindings(String datasourceKey){return tx(read,()->tables.selectList(Wrappers.<TableBindingPo>lambdaQuery().eq(TableBindingPo::getDatasourceKey,datasourceKey)).stream().map(MybatisTableOperationRepository::table).collect(Collectors.toList()));}
+    public List<TableBinding> cleanupBindings(String datasourceKey){return tx("repository.cleanupBindings",read,()->tables.selectList(Wrappers.<TableBindingPo>lambdaQuery().eq(TableBindingPo::getDatasourceKey,datasourceKey)).stream().map(MybatisTableOperationRepository::table).collect(Collectors.toList()));}
     /** 原子认领，固定应用、目录、操作的锁顺序。 */
     @Override
     public void begin(TableOperation op,TableBinding.Status expectedStatus){
         if(op.getMode()!=TableOperation.Mode.CREATE&&op.getMode()!=TableOperation.Mode.REBUILD)throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);
-        tx(write,()->{
+        tx("repository.begin",write,()->{
         DatasourceResource resource=application(resources.lock(op.getDatasourceKey()));resource.requireActive();if(resource.getDatasourceId()!=op.getDatasourceId())throw new BizException(ResourceErrorCode.TABLE_BINDING_CONFLICT);resource.claim(op.getId());
         TableBindingPo row=tables.lock(op.getDatasourceId(),op.getTableName());
         if(row==null){
@@ -79,9 +79,30 @@ public final class MybatisTableOperationRepository implements TableOperationRepo
         }else{TableBinding bound=table(row);bound.requireOwner(op.getDatasourceKey(),op.getDatasourceId());if(expectedStatus!=bound.getStatus())throw new BizException(ResourceErrorCode.RESOURCE_BUSY);}
         insertOperation(op);requireOne(resources.claim(op.getDatasourceKey(),op.getId()));return null;
     });}
+    /** 管理记录全批次原子受理；计数防止预检期间完成的受管操作被遗漏。 */
+    @Override
+    public void beginBatch(TableOperation op,List<TableBinding.Status> expected,long expectedCount){
+        if(op.getMode()!=TableOperation.Mode.CREATE_BATCH||expected.size()!=op.getTableNames().size())throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);
+        // 先检查转义后的 JSON 大小，不能在目录写入后才发现内容超限。
+        codec.content(op);codec.result(op);
+        tx("repository.beginBatch",write,()->{
+            DatasourceResource resource=application(resources.lock(op.getDatasourceKey()));resource.requireActive();resource.claim(op.getId());
+            if(resource.getDatasourceId()!=op.getDatasourceId())throw new BizException(ResourceErrorCode.TABLE_BINDING_CONFLICT);
+            long count=operations.selectCount(Wrappers.<TableOperationPo>lambdaQuery().eq(TableOperationPo::getDatasourceKey,op.getDatasourceKey()));
+            if(count!=expectedCount)throw new BizException(ResourceErrorCode.RESOURCE_BUSY);
+            for(String name:new TreeSet<>(op.getTableNames())){
+                TableBinding.Status status=expected.get(op.getTableNames().indexOf(name));TableBindingPo row=tables.lock(op.getDatasourceId(),name);
+                if(row==null){
+                    if(status!=null)throw new BizException(ResourceErrorCode.RESOURCE_BUSY);
+                    row=new TableBindingPo();row.setId(ids.nextId(row).longValue());row.setDatasourceKey(op.getDatasourceKey());row.setDatasourceId(op.getDatasourceId());row.setTableName(name);row.setStatus("REGISTERED");row.setDeleted(0);requireOne(tables.insert(row));
+                }else{TableBinding binding=table(row);binding.requireOwner(op.getDatasourceKey(),op.getDatasourceId());if(status!=binding.getStatus())throw new BizException(ResourceErrorCode.RESOURCE_BUSY);}
+            }
+            insertOperation(op);requireOne(resources.claim(op.getDatasourceKey(),op.getId()));return null;
+        });
+    }
     /** 清理只认领已有目录，并在同一资源锁内检测预览之后的受管变更。 */
     @Override
-    public void beginCleanup(TableOperation op,long expectedOperationCount){tx(write,()->{
+    public void beginCleanup(TableOperation op,long expectedOperationCount){tx("repository.beginCleanup",write,()->{
         if(op.getMode()!=TableOperation.Mode.DROP&&op.getMode()!=TableOperation.Mode.RELEASE)throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);
         DatasourceResource resource=application(resources.lock(op.getDatasourceKey()));resource.requireActive();resource.claim(op.getId());
         if(resource.getDatasourceId()!=op.getDatasourceId())throw new BizException(ResourceErrorCode.TABLE_BINDING_CONFLICT);
@@ -120,7 +141,7 @@ public final class MybatisTableOperationRepository implements TableOperationRepo
     }
     /** 每步结果与物理状态一次提交。 */
     @Override
-    public void saveStep(TableOperation op,TableBinding.Status state){tx(write,()->{
+    public void saveStep(TableOperation op,TableBinding.Status state){tx("repository.saveStep",write,()->{
         Locked locked=lockCurrent(op);TableBindingPo row=locked.table;
         TableOperation previous=codec.restore(locked.operation);int changed=0,changedIndex=-1;
         op.retainAbandonRequest(previous);
@@ -132,7 +153,7 @@ public final class MybatisTableOperationRepository implements TableOperationRepo
         }
         if(changed!=1)throw new BizException(ResourceErrorCode.RESOURCE_BUSY);
         if(state!=null){
-            if(op.getMode()==TableOperation.Mode.RELEASE){
+            if(op.getMode()==TableOperation.Mode.RELEASE||op.getMode()==TableOperation.Mode.CREATE_BATCH){
                 if(changedIndex>=op.getTableNames().size())throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);
                 row=tables.lock(op.getDatasourceId(),op.getTableNames().get(changedIndex));
             }
@@ -142,7 +163,7 @@ public final class MybatisTableOperationRepository implements TableOperationRepo
     });}
     /** 终态与占用释放一次提交，未知始终保留占用。 */
     @Override
-    public void finish(TableOperation op){tx(write,()->{
+    public void finish(TableOperation op){tx("repository.finish",write,()->{
         Locked locked=lockCurrent(op);op.retainAbandonRequest(codec.restore(locked.operation));if(op.getStatus()==TableOperation.Status.RUNNING)throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);
         TableOperationPo update=new TableOperationPo();update.setStatus(op.getStatus().name());update.setExecutionResult(codec.result(op));requireOne(operations.update(update,Wrappers.<TableOperationPo>lambdaUpdate().eq(TableOperationPo::getId,op.getId()).eq(TableOperationPo::getStatus,"RUNNING")));
         if(op.getMode()==TableOperation.Mode.RELEASE&&op.getStatus()==TableOperation.Status.SUCCEEDED){
@@ -156,10 +177,10 @@ public final class MybatisTableOperationRepository implements TableOperationRepo
     });}
     /** 详情查询始终按 datasourceKey 关联。 */
     @Override
-    public Optional<TableOperation> detail(String datasourceKey,long id){return tx(read,()->Optional.ofNullable(operations.selectOne(Wrappers.<TableOperationPo>lambdaQuery().eq(TableOperationPo::getDatasourceKey,datasourceKey).eq(TableOperationPo::getId,id))).map(codec::restore));}
+    public Optional<TableOperation> detail(String datasourceKey,long id){return tx("repository.detail",read,()->Optional.ofNullable(operations.selectOne(Wrappers.<TableOperationPo>lambdaQuery().eq(TableOperationPo::getDatasourceKey,datasourceKey).eq(TableOperationPo::getId,id))).map(codec::restore));}
     /** 限定数量的历史只读查询，LIMIT 仅拼接已验证整数。 */
     @Override
-    public List<TableOperation> recent(String datasourceKey,int limit){if(limit<1||limit>100)throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);return tx(read,()->operations.selectList(Wrappers.<TableOperationPo>lambdaQuery().eq(TableOperationPo::getDatasourceKey,datasourceKey).orderByDesc(TableOperationPo::getCreatedAt,TableOperationPo::getId).last("LIMIT "+limit)).stream().map(codec::restore).collect(Collectors.toList()));}
+    public List<TableOperation> recent(String datasourceKey,int limit){if(limit<1||limit>100)throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);return tx("repository.recent",read,()->operations.selectList(Wrappers.<TableOperationPo>lambdaQuery().eq(TableOperationPo::getDatasourceKey,datasourceKey).orderByDesc(TableOperationPo::getCreatedAt,TableOperationPo::getId).last("LIMIT "+limit)).stream().map(codec::restore).collect(Collectors.toList()));}
     /** 一次锁定的目录及操作只在当前事务内使用。 */
     @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
     private static final class Locked {

@@ -11,6 +11,26 @@ spring:
     name: managed-database-service
   profiles:
     default: dev
+  # 管理库必须提前创建；连接信息和凭据由环境变量提供。
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/inner
+    username: root
+    password: 0978zrr@
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      pool-name: managed-database-control
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 10000
+      connection-init-sql: "SET SESSION time_zone = '+00:00', innodb_lock_wait_timeout = 10"
+      data-source-properties:
+        connectTimeout: 10000
+        socketTimeout: 10000
+        connectionTimeZone: UTC
+  sql:
+    init:
+      # 三张管理表只通过手工脚本初始化，启动时不自动建表。
+      mode: never
   jackson:
     time-zone: UTC
     deserialization:
@@ -19,13 +39,37 @@ spring:
     serialization:
       write-dates-as-timestamps: false
 
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+
 logging:
   level:
     com.cmbchina.managedb: INFO
     org.springframework.transaction.support.TransactionTemplate: OFF
 
 managed-database:
-  service-key: ${MANAGED_DATABASE_SERVICE_KEY:}
+  service-key: 4b20de6b438fdd3902dec04b6eb113c517412bdf50ee635109294411d8f82999
+  id:
+    # 多实例部署时，每个实例必须使用不同的编号组合，各为 0～31。
+    worker-id: ${MANAGED_DB_WORKER_ID:0}
+    datacenter-id: ${MANAGED_DB_DATACENTER_ID:0}
+  registration:
+    transaction-timeout-seconds: ${MANAGED_DB_TRANSACTION_TIMEOUT_SECONDS:10}
+  mount:
+    timeout-millis: ${MANAGED_DB_MOUNT_TIMEOUT_MILLIS:5000}
+    # 本机开发沿用模板默认值；其他环境显式提供所需的 TLS 模式。
+    ssl-mode: ${MANAGED_DB_SSL_MODE:DISABLED}
+  runtime:
+    # 调试账号必须独立于下方挂载建表账号，且不能使用 root。
+    # 凭据留空时仅禁用对应挂载的连接下发，不回退到其他账号。
+    list:
+      - datasource-id: 1
+        username: root
+        password: 0978zrr@
+        ssl-mode: "${MANAGED_DATABASE_RUNTIME_1_SSL_MODE:VERIFY_IDENTITY}"
+
   sql:
     max-sql-bytes: ${MANAGED_DB_SQL_MAX_BYTES:65536}
     max-check-tables: ${MANAGED_DB_CHECK_MAX_TABLES:200}
@@ -34,3 +78,13 @@ managed-database:
     execution-timeout-seconds: ${MANAGED_DB_SQL_TIMEOUT_SECONDS:30}
     metadata-timeout-seconds: ${MANAGED_DB_METADATA_TIMEOUT_SECONDS:5}
     network-timeout-millis: ${MANAGED_DB_SQL_NETWORK_TIMEOUT_MILLIS:35000}
+
+devagent-studio:
+  # 挂载编号一经使用不可改指向；仅使用一个挂载时，同时移除对应 runtime 项。
+  list:
+    - datasource-id: 1
+      host: 127.0.0.1
+      db-name: inner
+      port: 3306
+      username: root
+      password: 0978zrr@

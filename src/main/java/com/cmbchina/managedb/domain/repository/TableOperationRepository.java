@@ -20,6 +20,8 @@ public interface TableOperationRepository {
     List<TableBinding> cleanupBindings(String datasourceKey);
     /** 原子登记目录、创建操作并认领占用，核对预检查时的目录状态。 */
     void begin(TableOperation operation,TableBinding.Status expectedStatus);
+    /** 批次在同一资源锁内复核预检计数和目录后原子认领。 */
+    void beginBatch(TableOperation operation,List<TableBinding.Status> expectedStatuses,long expectedOperationCount);
     /** 在资源锁内复核操作计数及完整清单，清理不创建或认领目录外表。 */
     void beginCleanup(TableOperation operation,long expectedOperationCount);
     /** 保存步骤及可选目录变化，核对当前占用。 */
