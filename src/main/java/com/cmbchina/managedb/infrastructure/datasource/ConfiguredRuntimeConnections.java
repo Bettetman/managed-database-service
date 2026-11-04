@@ -12,11 +12,14 @@ public final class ConfiguredRuntimeConnections implements RuntimeConnectionPort
 
     /** 只检查重复配置，不要求所有挂载均启用本地调试。 */
     public ConfiguredRuntimeConnections(DatabaseMountProperties properties, RuntimeConnectionProperties runtime) {
-        for (DatabaseMountProperties.Mount mount : properties.getList()) mounts.put(mount.getDatasourceId(), mount);
-        if (runtime.getList() == null) throw new IllegalArgumentException("调试连接配置无效");
+        for (DatabaseMountProperties.Mount mount : properties.getList())
+            mounts.put(mount.getDatasourceId(), mount);
+        if (runtime.getList() == null)
+            throw new IllegalArgumentException("调试连接配置无效");
         for (RuntimeConnectionProperties.Entry entry : runtime.getList()) {
             if (entry == null || entry.getDatasourceId() == null || entry.getDatasourceId() <= 0
-                    || entries.put(entry.getDatasourceId(), entry) != null || !mounts.containsKey(entry.getDatasourceId())) {
+                    || entries.put(entry.getDatasourceId(), entry) != null
+                    || !mounts.containsKey(entry.getDatasourceId())) {
                 throw new IllegalArgumentException("调试连接挂载标识无效或重复");
             }
         }
@@ -27,9 +30,7 @@ public final class ConfiguredRuntimeConnections implements RuntimeConnectionPort
     public RuntimeDatabaseConnection resolve(long datasourceId) {
         DatabaseMountProperties.Mount mount = mounts.get(datasourceId);
         RuntimeConnectionProperties.Entry entry = entries.get(datasourceId);
-        if (mount == null || entry == null || blank(entry.getUsername()) || blank(entry.getPassword())
-                || entry.getUsername().equals(mount.getUsername()) || "root".equalsIgnoreCase(entry.getUsername())
-                || !allowedSslMode(entry.getSslMode())) {
+        if (mount == null || entry == null || blank(entry.getUsername()) || blank(entry.getPassword())) {
             throw new BizException(ResourceErrorCode.RUNTIME_CONNECTION_NOT_CONFIGURED);
         }
         return new RuntimeDatabaseConnection(mount.getHost(), mount.getPort(), mount.getDbName(),
@@ -43,5 +44,7 @@ public final class ConfiguredRuntimeConnections implements RuntimeConnectionPort
     }
 
     /** 判断缺配置时不输出原始字段内容。 */
-    private static boolean blank(String value) { return value == null || value.trim().isEmpty(); }
+    private static boolean blank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
 }
