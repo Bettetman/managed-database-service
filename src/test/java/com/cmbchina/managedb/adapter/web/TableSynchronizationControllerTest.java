@@ -6,6 +6,7 @@ import com.cmbchina.managedb.application.*;
 import com.cmbchina.managedb.application.view.*;
 import com.cmbchina.managedb.common.exception.BaseExceptionHandler;
 import com.cmbchina.managedb.common.exception.BizException;
+import com.cmbchina.managedb.common.response.JsonResponseAdvice;
 import com.cmbchina.managedb.domain.ResourceErrorCode;
 import com.fasterxml.jackson.databind.*;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,7 +36,7 @@ class TableSynchronizationControllerTest {
         batches = mock(BatchTableOperationService.class);
         ObjectMapper mapper = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         mvc = MockMvcBuilders.standaloneSetup(new TableSynchronizationController(operations, readiness, batches))
-                .setControllerAdvice(new BaseExceptionHandler())
+                .setControllerAdvice(new BaseExceptionHandler(), new JsonResponseAdvice())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(mapper))
                 .addFilters(new ServiceKeyFilter("test-only-key", mapper)).build();
     }
@@ -46,8 +47,8 @@ class TableSynchronizationControllerTest {
         when(operations.submit("b0ddb23acc91", "CREATE", "CREATE TABLE orders(id bigint)", false))
                 .thenReturn(new TableOperationReceipt(101L));
         mvc.perform(request("/table-operations", "{\"mode\":\"CREATE\",\"sql\":\"CREATE TABLE orders(id bigint)\"}"))
-                .andExpect(status().isAccepted()).andExpect(jsonPath("$.operationId").value("101"))
-                .andExpect(jsonPath("$.status").value("RUNNING"));
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.body.operationId").value("101"))
+                .andExpect(jsonPath("$.body.status").value("RUNNING"));
     }
 
     /** 未同步仍是正常检查结果，HTTP 200。 */
@@ -56,7 +57,7 @@ class TableSynchronizationControllerTest {
         when(readiness.check("b0ddb23acc91", Collections.emptyList())).thenReturn(new TableReadinessView(
                 false, 1L, "OPERATION_IN_PROGRESS", "101", "RUNNING", Collections.emptyList(), Collections.emptyList()));
         mvc.perform(request("/tables/check", "{\"sqls\":[]}"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.ready").value(false));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.body.ready").value(false));
     }
 
     /** 不接受额外挂载参数，不在鉴权前解析 SQL，也不回显内部异常。 */
@@ -70,7 +71,7 @@ class TableSynchronizationControllerTest {
         verifyNoInteractions(operations, readiness);
         when(operations.submit("b0ddb23acc91", "CREATE", "sql", false)).thenThrow(new BizException(ResourceErrorCode.RESOURCE_BUSY));
         mvc.perform(request("/table-operations", "{\"mode\":\"CREATE\",\"sql\":\"sql\"}"))
-                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("RESOURCE_BUSY"));
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.returnCode").value("RESOURCE_BUSY"));
     }
 
     /** 执行容量不足使用独立错误码和 503，与应用冲突的 409 区分。 */
@@ -80,7 +81,7 @@ class TableSynchronizationControllerTest {
                 .thenThrow(new BizException(ResourceErrorCode.EXECUTION_CAPACITY_EXHAUSTED));
         mvc.perform(request("/table-operations", "{\"mode\":\"CREATE\",\"sql\":\"sql\"}"))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("EXECUTION_CAPACITY_EXHAUSTED"));
+                .andExpect(jsonPath("$.returnCode").value("EXECUTION_CAPACITY_EXHAUSTED"));
     }
 
     /** 缺少显式主键返回专用 400 错误，便于客户端定位建表定义问题。 */
@@ -90,7 +91,7 @@ class TableSynchronizationControllerTest {
                 .thenThrow(new BizException(ResourceErrorCode.PRIMARY_KEY_REQUIRED));
         mvc.perform(request("/table-operations", "{\"mode\":\"CREATE\",\"sql\":\"sql\"}"))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("PRIMARY_KEY_REQUIRED"));
+                .andExpect(jsonPath("$.returnCode").value("PRIMARY_KEY_REQUIRED"));
     }
 
     /** 路径类型及参数验证按标准 400 处理。 */
@@ -107,7 +108,7 @@ class TableSynchronizationControllerTest {
     void acceptsBatchAndRequiresAuthentication() throws Exception {
         when(batches.submit("b0ddb23acc91","CREATE",Collections.singletonList("sql"))).thenReturn(new TableOperationReceipt(102L));
         mvc.perform(request("/table-operations/batch","{\"mode\":\"CREATE\",\"sqls\":[\"sql\"]}"))
-                .andExpect(status().isAccepted()).andExpect(jsonPath("$.operationId").value("102")).andExpect(jsonPath("$.status").value("RUNNING"));
+                .andExpect(status().isAccepted()).andExpect(jsonPath("$.body.operationId").value("102")).andExpect(jsonPath("$.body.status").value("RUNNING"));
         mvc.perform(post(BASE+"/table-operations/batch").servletPath(BASE+"/table-operations/batch").contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isUnauthorized());
     }
@@ -116,9 +117,9 @@ class TableSynchronizationControllerTest {
     void rejectsMalformedBatchWithoutCallingUseCase() throws Exception {
         ObjectMapper mapper=new ObjectMapper().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
         MockMvc strict=MockMvcBuilders.standaloneSetup(new TableSynchronizationController(operations,readiness,batches))
-                .setControllerAdvice(new BaseExceptionHandler()).setMessageConverters(new MappingJackson2HttpMessageConverter(mapper)).build();
+                .setControllerAdvice(new BaseExceptionHandler(), new JsonResponseAdvice()).setMessageConverters(new MappingJackson2HttpMessageConverter(mapper)).build();
         for(String body:new String[]{"{}","{\"mode\":3,\"sqls\":[]}","{\"mode\":\"CREATE\",\"sqls\":[3]}","{\"mode\":\"CREATE\",\"sqls\":[null]}","{\"mode\":\"CREATE\",\"sqls\":\"sql\"}","{\"mode\":\"CREATE\",\"sqls\":[],\"schema\":\"x\"}"}){
-            strict.perform(request("/table-operations/batch",body)).andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_ARGUMENT"));
+            strict.perform(request("/table-operations/batch",body)).andExpect(status().isBadRequest()).andExpect(jsonPath("$.returnCode").value("INVALID_ARGUMENT"));
         }
         verifyNoInteractions(batches);
     }

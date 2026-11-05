@@ -3,13 +3,18 @@ package com.cmbchina.managedb.common.response;
 import lombok.NoArgsConstructor;
 import lombok.AccessLevel;
 import com.cmbchina.managedb.common.exception.IErrorCode;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Getter;
 import lombok.Setter;
 
-/** 沿用模板的基础设施 HTTP 响应格式；后续 AG-UI 业务流不使用此包装。 */
+import java.util.Collections;
+import java.util.Map;
+
+/** 非流式 JSON 接口使用的统一响应格式。 */
 @Getter
 @Setter
 @NoArgsConstructor(access = AccessLevel.PRIVATE)
+@JsonInclude(JsonInclude.Include.ALWAYS)
 public class ResponseEntity<T> {
 
     private String returnCode;
@@ -17,8 +22,8 @@ public class ResponseEntity<T> {
     private T body;
 
     /** 创建不携带业务数据的成功响应。 */
-    public static <T> ResponseEntity<T> success() {
-        return success(null);
+    public static ResponseEntity<Map<String, Object>> success() {
+        return success(Collections.emptyMap());
     }
 
     /** 创建携带数据的成功响应。 */
@@ -30,15 +35,16 @@ public class ResponseEntity<T> {
     }
 
     /** 根据统一错误码创建失败响应。 */
-    public static <T> ResponseEntity<T> failed(IErrorCode errorCode, Object... params) {
+    public static ResponseEntity<Map<String, Object>> failed(IErrorCode errorCode, Object... params) {
         return failed(errorCode.getErrorCodeStr(), errorCode.getErrorMessage(params));
     }
 
     /** 根据已脱敏的错误码与提示创建失败响应。 */
-    public static <T> ResponseEntity<T> failed(String errorCode, String errorMsg) {
-        ResponseEntity<T> response = new ResponseEntity<>();
+    public static ResponseEntity<Map<String, Object>> failed(String errorCode, String errorMsg) {
+        ResponseEntity<Map<String, Object>> response = new ResponseEntity<>();
         response.setReturnCode(errorCode);
         response.setErrorMsg(errorMsg);
+        response.setBody(Collections.emptyMap());
         return response;
     }
 }

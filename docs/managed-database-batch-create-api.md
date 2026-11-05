@@ -15,7 +15,7 @@ curl -X POST "${SERVICE_URL}/managed-database/datasources/12ab34cd56ef/table-ope
 
 以上仅为联通测试结构；调用方应提交自己的完整原始 DDL，仅替换目标表名，不以示例覆盖业务字段。
 
-成功受理返回 HTTP 202：`{"operationId":"100256","status":"RUNNING"}`。编号保持字符串；202 仅代表管理记录已保存、任务已调度。全批预检失败没有操作记录，也不会创建前面合法的表。受理阶段提交结果未知时仍可能已保存记录，不得把错误响应当成安全重试证明，应查询历史。
+成功受理返回 HTTP 202，响应为 `{"returnCode":"SUC0000","errorMsg":null,"body":{"operationId":"100256","status":"RUNNING"}}`。编号保持字符串；202 仅代表管理记录已保存、任务已调度。全批预检失败没有操作记录，也不会创建前面合法的表。受理阶段提交结果未知时仍可能已保存记录，不得把错误响应当成安全重试证明，应查询历史。
 
 所有表先解析、核对目录与真实结构；只有本资源 CREATED 且结构一致的表可跳过 SQL，目录外同名表不得认领。允许显式 CREATE 补建已确认不存在的归属表。外键仅可引用自身或当前已建成的本资源表，拒绝引用同批次尚未创建的表，即使它排在前面。预检期间的受管操作变化在事务锁内通过操作计数及目录状态再次核对；执行前仍回读真实状态。
 
@@ -26,7 +26,7 @@ GET /managed-database/datasources/{datasourceKey}/table-operations/{operationId}
 GET /managed-database/datasources/{datasourceKey}/table-operations
 ```
 
-批次详情 mode 为 CREATE_BATCH，tableName 为空字符串；tableNames 按输入顺序排列。executionResult.steps 每表一步，保留 sequence、status、startedAt、finishedAt、errorCode、errorSummary、verification，并新增派生 tableName。恢复与人工审计字段不变，原 SQL 不在详情中返回。内部持久化动作名为 CREATE_TABLE_BATCH，allowDataLoss=false。
+批次详情和历史列表分别放在响应的 `body` 中。批次详情 mode 为 CREATE_BATCH，tableName 为空字符串；tableNames 按输入顺序排列。executionResult.steps 每表一步，保留 sequence、status、startedAt、finishedAt、errorCode、errorSummary、verification，并新增派生 tableName。恢复与人工审计字段不变，原 SQL 不在详情中返回。内部持久化动作名为 CREATE_TABLE_BATCH，allowDataLoss=false。
 
 四表批次的典型结果（表中为步骤状态摘要，实际响应保留全部时间与证据）：
 

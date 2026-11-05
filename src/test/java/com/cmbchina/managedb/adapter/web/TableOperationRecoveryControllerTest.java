@@ -5,6 +5,7 @@ import com.cmbchina.managedb.adapter.web.security.ServiceKeyFilter;
 import com.cmbchina.managedb.application.*;
 import com.cmbchina.managedb.application.view.TableOperationView;
 import com.cmbchina.managedb.common.exception.BizException;
+import com.cmbchina.managedb.common.response.JsonResponseAdvice;
 import com.cmbchina.managedb.domain.*;
 import com.fasterxml.jackson.databind.*;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +35,7 @@ class TableOperationRecoveryControllerTest {
         recovery=mock(TableOperationRecoveryService.class);operations=mock(TableOperationService.class);
         mapper=new ObjectMapper().findAndRegisterModules();
         mvc=MockMvcBuilders.standaloneSetup(new TableOperationRecoveryController(recovery,operations))
+                .setControllerAdvice(new JsonResponseAdvice())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(mapper))
                 .addFilters(new ServiceKeyFilter("test-only-key",mapper)).build();
     }

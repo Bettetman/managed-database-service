@@ -1,6 +1,6 @@
 package com.cmbchina.managedb.adapter.web.security;
 
-import com.cmbchina.managedb.common.response.ErrorResponse;
+import com.cmbchina.managedb.common.response.ResponseEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.Ordered;
@@ -61,6 +61,6 @@ public class ServiceKeyFilter extends OncePerRequestFilter {
         response.setStatus(status);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        mapper.writeValue(response.getOutputStream(), new ErrorResponse(code, message));
+        mapper.writeValue(response.getOutputStream(), ResponseEntity.failed(code, message));
     }
 }

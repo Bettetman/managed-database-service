@@ -62,6 +62,8 @@ flowchart LR
 
 以下资源路径前缀统一为 `/managed-database/datasources/{datasourceKey}`。注册、建表、结构检查、元数据和连接接口使用 JSON，数据查看、清理和操作恢复入口使用 AG-UI；Studio 产品交互通过自身后端 AG-UI，不由 Renderer 直接调用 SaaS 或持有服务密钥。
 
+非流式 JSON 接口（含健康检查）统一返回 `returnCode`、`errorMsg` 和 `body`。成功时 `returnCode` 为 `SUC0000`、`errorMsg` 为 `null`，原有对象或数组放入 `body`。失败时使用原有错误码和脱敏提示，无数据时 `body` 为 `{}`。HTTP 状态仍按各接口约定返回。
+
 | 方法与路径 | 用途 |
 | --- | --- |
 | GET /health | 进程健康，不检查业务表结构 |
@@ -88,10 +90,14 @@ appName 必填，1～255 个字符；appKey 可选，提供时为 1～64 个字�
 
 ```json
 {
-  "datasourceKey": "12ab34cd56ef",
-  "datasourceId": 2,
-  "status": "REGISTERED",
-  "isDeleted": false
+  "returnCode": "SUC0000",
+  "errorMsg": null,
+  "body": {
+    "datasourceKey": "12ab34cd56ef",
+    "datasourceId": 2,
+    "status": "REGISTERED",
+    "isDeleted": false
+  }
 }
 ```
 

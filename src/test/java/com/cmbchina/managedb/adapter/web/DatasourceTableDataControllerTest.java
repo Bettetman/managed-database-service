@@ -4,6 +4,7 @@ import com.cmbchina.managedb.adapter.web.application.DatasourceTableDataControll
 import com.cmbchina.managedb.adapter.web.security.ServiceKeyFilter;
 import com.cmbchina.managedb.application.DatasourceTableDataService;
 import com.cmbchina.managedb.application.view.TableDataView;
+import com.cmbchina.managedb.common.response.JsonResponseAdvice;
 import com.cmbchina.managedb.domain.*;
 import com.fasterxml.jackson.databind.*;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +33,7 @@ class DatasourceTableDataControllerTest {
     void setUp(){
         service=mock(DatasourceTableDataService.class);mapper=new ObjectMapper().findAndRegisterModules();
         mvc=MockMvcBuilders.standaloneSetup(new DatasourceTableDataController(service,mapper))
+                .setControllerAdvice(new JsonResponseAdvice())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(mapper))
                 .addFilters(new ServiceKeyFilter("test-only-key",mapper)).build();
     }

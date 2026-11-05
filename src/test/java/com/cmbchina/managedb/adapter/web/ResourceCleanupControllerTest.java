@@ -5,6 +5,7 @@ import com.cmbchina.managedb.adapter.web.security.ServiceKeyFilter;
 import com.cmbchina.managedb.application.ResourceCleanupService;
 import com.cmbchina.managedb.application.view.ResourceCleanupPreview;
 import com.cmbchina.managedb.common.exception.BizException;
+import com.cmbchina.managedb.common.response.JsonResponseAdvice;
 import com.cmbchina.managedb.domain.ResourceErrorCode;
 import com.fasterxml.jackson.databind.*;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,7 +29,7 @@ class ResourceCleanupControllerTest {
 
     /** 只装配协议和过滤器，不启动应用、不连接数据库。 */
     @BeforeEach
-    void setUp(){service=mock(ResourceCleanupService.class);mapper=new ObjectMapper().findAndRegisterModules();mvc=MockMvcBuilders.standaloneSetup(new ResourceCleanupController(service)).setMessageConverters(new MappingJackson2HttpMessageConverter(mapper)).addFilters(new ServiceKeyFilter("test-only-key",mapper)).build();}
+    void setUp(){service=mock(ResourceCleanupService.class);mapper=new ObjectMapper().findAndRegisterModules();mvc=MockMvcBuilders.standaloneSetup(new ResourceCleanupController(service)).setControllerAdvice(new JsonResponseAdvice()).setMessageConverters(new MappingJackson2HttpMessageConverter(mapper)).addFilters(new ServiceKeyFilter("test-only-key",mapper)).build();}
 
     /** 读取真实 SSE 输出，检查完整生命周期而不是只断言 HTTP 成功。 */
     private List<JsonNode> events(String props) throws Exception {

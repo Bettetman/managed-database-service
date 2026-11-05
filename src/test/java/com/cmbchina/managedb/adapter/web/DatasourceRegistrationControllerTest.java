@@ -6,6 +6,7 @@ import com.cmbchina.managedb.application.DatasourceRegistration;
 import com.cmbchina.managedb.application.view.DatasourceResourceView;
 import com.cmbchina.managedb.common.exception.BaseExceptionHandler;
 import com.cmbchina.managedb.common.exception.BizException;
+import com.cmbchina.managedb.common.response.JsonResponseAdvice;
 import com.cmbchina.managedb.domain.DatasourceResource;
 import com.cmbchina.managedb.domain.ResourceErrorCode;
 import com.cmbchina.managedb.domain.valueobject.DatasourceKey;
@@ -16,6 +17,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -38,7 +40,7 @@ class DatasourceRegistrationControllerTest {
     /** 复用同一过滤链配置测试缺失服务配置的场景。 */
     private MockMvc mockMvc(String key) {
         return MockMvcBuilders.standaloneSetup(new DatasourceRegistrationController(registration))
-                .setControllerAdvice(new BaseExceptionHandler())
+                .setControllerAdvice(new BaseExceptionHandler(), new JsonResponseAdvice())
                 .addFilters(new ServiceKeyFilter(key, new ObjectMapper())).build();
     }
 
@@ -48,11 +50,13 @@ class DatasourceRegistrationControllerTest {
         mvc.perform(request("{\"appName\":\"注册测试\"}").header("Authorization", "Bearer test-only-key"))
                 .andExpect(status().isCreated())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.datasourceKey").value("b0ddb23acc91"))
-                .andExpect(jsonPath("$.appKey").doesNotExist())
-                .andExpect(jsonPath("$.datasourceId").value(1))
-                .andExpect(jsonPath("$.isDeleted").value(false))
-                .andExpect(jsonPath("$.status").value("REGISTERED"));
+                .andExpect(jsonPath("$.returnCode").value("SUC0000"))
+                .andExpect(jsonPath("$.errorMsg").value(nullValue()))
+                .andExpect(jsonPath("$.body.datasourceKey").value("b0ddb23acc91"))
+                .andExpect(jsonPath("$.body.appKey").doesNotExist())
+                .andExpect(jsonPath("$.body.datasourceId").value(1))
+                .andExpect(jsonPath("$.body.isDeleted").value(false))
+                .andExpect(jsonPath("$.body.status").value("REGISTERED"));
     }
 
     /** 外部提交 datasourceKey、数组、null 或损坏 JSON 均不能触发注册。 */
@@ -67,7 +71,7 @@ class DatasourceRegistrationControllerTest {
                 "{\"appName\":\"注册测试\",\"appKey\":\"" + String.join("", java.util.Collections.nCopies(65, "k")) + "\"}"}) {
             mvc.perform(request(body).header("Authorization", "Bearer test-only-key"))
                     .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.code").value("INVALID_ARGUMENT"));
+                    .andExpect(jsonPath("$.returnCode").value("INVALID_ARGUMENT"));
         }
         verifyNoInteractions(registration);
     }
@@ -90,7 +94,9 @@ class DatasourceRegistrationControllerTest {
     @Test
     void rejectsMissingOrWrongCredentialsBeforeParsing() throws Exception {
         mvc.perform(request("{")).andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
+                .andExpect(header().string("WWW-Authenticate", "Bearer"))
+                .andExpect(content().json(
+                        "{\"returnCode\":\"UNAUTHENTICATED\",\"errorMsg\":\"服务密钥缺失或错误\",\"body\":{}}", true));
         mvc.perform(request("{}").header("Authorization", "Bearer wrong"))
                 .andExpect(status().isUnauthorized());
         verifyNoInteractions(registration);
@@ -105,7 +111,7 @@ class DatasourceRegistrationControllerTest {
         when(registration.register(null, "注册测试")).thenThrow(new BizException(ResourceErrorCode.RESOURCE_SERVICE_NOT_CONFIGURED));
         mvc.perform(request("{\"appName\":\"注册测试\"}").header("Authorization", "Bearer test-only-key"))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("RESOURCE_SERVICE_NOT_CONFIGURED"));
+                .andExpect(jsonPath("$.returnCode").value("RESOURCE_SERVICE_NOT_CONFIGURED"));
         verify(registration).register(null, "注册测试");
     }
 

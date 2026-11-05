@@ -5,6 +5,7 @@ import com.cmbchina.managedb.adapter.web.security.ServiceKeyFilter;
 import com.cmbchina.managedb.application.DatasourceTableMetadataService;
 import com.cmbchina.managedb.application.view.*;
 import com.cmbchina.managedb.common.exception.*;
+import com.cmbchina.managedb.common.response.JsonResponseAdvice;
 import com.cmbchina.managedb.domain.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,7 +31,7 @@ class DatasourceTableMetadataControllerTest {
         service = mock(DatasourceTableMetadataService.class);
         ObjectMapper mapper = new ObjectMapper();
         mvc = MockMvcBuilders.standaloneSetup(new DatasourceTableMetadataController(service))
-                .setControllerAdvice(new BaseExceptionHandler())
+                .setControllerAdvice(new BaseExceptionHandler(), new JsonResponseAdvice())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(mapper))
                 .addFilters(new ServiceKeyFilter("test-only-key", mapper)).build();
     }
@@ -41,10 +42,10 @@ class DatasourceTableMetadataControllerTest {
         TableMetadata table = new TableMetadata("orders", "订单表", Collections.emptyList());
         when(service.tables(APP)).thenReturn(new DatasourceTablesView(APP, Collections.singletonList(table)));
         mvc.perform(get(BASE).servletPath(BASE).header("Authorization", "Bearer test-only-key"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.datasourceKey").value(APP))
-                .andExpect(jsonPath("$.tables[0].tableName").value("orders"))
-                .andExpect(jsonPath("$.tables[0].description").value("订单表"))
-                .andExpect(jsonPath("$.datasourceId").doesNotExist()).andExpect(jsonPath("$.schema").doesNotExist());
+                .andExpect(status().isOk()).andExpect(jsonPath("$.body.datasourceKey").value(APP))
+                .andExpect(jsonPath("$.body.tables[0].tableName").value("orders"))
+                .andExpect(jsonPath("$.body.tables[0].description").value("订单表"))
+                .andExpect(jsonPath("$.body.datasourceId").doesNotExist()).andExpect(jsonPath("$.body.schema").doesNotExist());
     }
 
     /** 字段保留真实可空、主键、自增及默认值语义。 */
@@ -55,10 +56,10 @@ class DatasourceTableMetadataControllerTest {
         when(service.columns(APP, "orders")).thenReturn(new TableColumnsView(APP, table));
         String path = BASE + "/orders/columns";
         mvc.perform(get(path).servletPath(path).header("Authorization", "Bearer test-only-key"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.columns[0].name").value("id"))
-                .andExpect(jsonPath("$.columns[0].primaryKey").value(true))
-                .andExpect(jsonPath("$.columns[0].autoIncrement").value(true))
-                .andExpect(jsonPath("$.columns[0].nullable").value(false));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.body.columns[0].name").value("id"))
+                .andExpect(jsonPath("$.body.columns[0].primaryKey").value(true))
+                .andExpect(jsonPath("$.body.columns[0].autoIncrement").value(true))
+                .andExpect(jsonPath("$.body.columns[0].nullable").value(false));
     }
 
     /** 未鉴权请求在用例执行前拒绝，不读取表目录。 */
@@ -73,7 +74,7 @@ class DatasourceTableMetadataControllerTest {
     void keepsBusyUnavailableAndNotFoundDistinct() throws Exception {
         when(service.tables(APP)).thenThrow(new BizException(ResourceErrorCode.RESOURCE_BUSY));
         mvc.perform(get(BASE).servletPath(BASE).header("Authorization", "Bearer test-only-key"))
-                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("RESOURCE_BUSY"));
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.returnCode").value("RESOURCE_BUSY"));
         doThrow(new BizException(ResourceErrorCode.DATABASE_UNAVAILABLE)).when(service).tables(APP);
         mvc.perform(get(BASE).servletPath(BASE).header("Authorization", "Bearer test-only-key"))
                 .andExpect(status().isServiceUnavailable());
