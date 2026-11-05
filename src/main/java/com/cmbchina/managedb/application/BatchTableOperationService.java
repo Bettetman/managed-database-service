@@ -18,14 +18,16 @@ public class BatchTableOperationService {
     private final TableSqlSupport support;
     private final TableStructureComparator comparator;
     private final TableTaskDispatcher dispatcher;
-    private final TableSyncSettings settings;
     private final TableOperationService operations;
     /** 不接受破坏性模式；任一预检失败都不得登记目录或发送 SQL。 */
     public TableOperationReceipt submit(String rawKey,String mode,List<String> sqls){
         String key=new DatasourceKey(rawKey).getValue();
         if(!"CREATE".equals(mode))throw new BizException(ResourceErrorCode.INVALID_ARGUMENT);
-        settings.validateBatch(sqls);
-        List<String> originals=new ArrayList<>(sqls),names=new ArrayList<>();List<Boolean> satisfied=new ArrayList<>();List<TableBinding.Status> statuses=new ArrayList<>();
+        support.validateBatch(sqls);
+        List<String> originals=new ArrayList<>(sqls);
+        List<String> names=new ArrayList<>();
+        List<Boolean> satisfied=new ArrayList<>();
+        List<TableBinding.Status> statuses=new ArrayList<>();
         CheckContext context=repository.checkContext(key);DatasourceResource resource=context.getResource();resource.requireActive();
         if(resource.getActiveOperationId()!=null)throw new BizException(ResourceErrorCode.RESOURCE_BUSY);
         Set<String> unique=new HashSet<>();List<TableStructure> structures=new ArrayList<>();

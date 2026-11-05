@@ -35,7 +35,9 @@ class TableSynchronizationTest {
     private final Map<String, TableBinding> bindings = new HashMap<>();
     private final Map<String, TableStructure> physical = new HashMap<>();
     private long count;
-    private boolean rejectCreate, unknownCreate, defer;
+    private boolean rejectCreate;
+    private boolean unknownCreate;
+    private boolean defer;
 
     /** 模拟受理短事务及逐步保存，恢复时复制记录以避免内存引用掩盖落库失败。 */
     @BeforeEach
@@ -86,7 +88,7 @@ class TableSynchronizationTest {
         TableSqlSupport support = new TableSqlSupport(schemas, repository, settings);
         TableStructureComparator comparator = new TableStructureComparator();
         operations = new TableOperationService(repository, schemas, support, comparator, dispatcher);
-        batches = new BatchTableOperationService(repository,schemas,support,comparator,dispatcher,settings,operations);
+        batches = new BatchTableOperationService(repository,schemas,support,comparator,dispatcher,operations);
         readiness = new TableReadinessService(repository, schemas, support, comparator, settings);
     }
 

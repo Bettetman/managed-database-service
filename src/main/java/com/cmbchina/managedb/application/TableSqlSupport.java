@@ -14,6 +14,10 @@ public class TableSqlSupport {
     private final DatabaseSchemaPort schemas;
     private final TableOperationRepository repository;
     private final TableSyncSettings settings;
+    /** 在读取资源或解析 SQL 前统一校验批次数量及字节上限。 */
+    public void validateBatch(List<String> sqls){
+        settings.validateBatch(sqls);
+    }
     /** 解析后先校验显式主键，再规范化表位置；原文保持不变，不自动补主键。 */
     public ParsedCreateTable parse(long datasourceId,String sql){
         settings.validateSql(sql);ParsedCreateTable parsed=schemas.parseCreate(sql);
@@ -31,7 +35,8 @@ public class TableSqlSupport {
                 target=schemas.readTable(datasourceId,key.getTargetTable()).orElseThrow(()->new BizException(ResourceErrorCode.TABLE_BINDING_CONFLICT));
             }
             for(int i=0;i<key.getColumns().size();i++){
-                TableStructure.Column local=expected.getColumns().get(key.getColumns().get(i)),remote=target.getColumns().get(key.getTargetColumns().get(i));
+                TableStructure.Column local=expected.getColumns().get(key.getColumns().get(i));
+                TableStructure.Column remote=target.getColumns().get(key.getTargetColumns().get(i));
                 if(local==null||remote==null||!local.getType().equals(remote.getType())||local.getCharset()!=null&&!local.getCharset().equals(remote.getCharset())||local.getCollation()!=null&&!local.getCollation().equals(remote.getCollation()))throw new BizException(ResourceErrorCode.SQL_UNSUPPORTED);
             }
             boolean indexed=false;for(TableStructure.Index index:target.getIndexes())if(!index.getKind().equals("INDEX")&&index.getColumns().equals(key.getTargetColumns()))indexed=true;
