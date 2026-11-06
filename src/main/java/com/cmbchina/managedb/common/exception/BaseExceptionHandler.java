@@ -29,6 +29,9 @@ public class BaseExceptionHandler {
             case "PRIMARY_KEY_REQUIRED":
             case "INVALID_ARGUMENT":
             case "INVALID_RESOURCE_ARGUMENT": status = HttpStatus.BAD_REQUEST; break;
+            case "SEED_REQUEST_TOO_LARGE": status = HttpStatus.PAYLOAD_TOO_LARGE; break;
+            case "IDEMPOTENCY_CONFLICT":
+            case "SEED_DATA_CONFLICT":
             case "TABLE_BINDING_CONFLICT":
             case "STRUCTURE_MISMATCH":
             case "RESOURCE_BUSY": status = HttpStatus.CONFLICT; break;

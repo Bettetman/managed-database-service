@@ -22,10 +22,13 @@ class ApplicationServiceInjectionTest {
             context.registerBean(TableTaskDispatcher.class, () -> mock(TableTaskDispatcher.class));
             context.registerBean(TableSyncSettings.class, () -> new TableSyncSettings(65536, 200, 4194304));
             context.registerBean(TableStructureComparator.class, TableStructureComparator::new);
+            context.registerBean(DataOperationRepository.class, () -> mock(DataOperationRepository.class));
+            context.registerBean(AuthorizationSeedPort.class, () -> mock(AuthorizationSeedPort.class));
             context.scan("com.cmbchina.managedb.application"); context.refresh();
             assertSame(context.getBean(DatasourceRegistrationService.class), context.getBean(DatasourceRegistration.class));
             assertSame(context.getBean(DatasourceResourceQueryService.class), context.getBean(DatasourceResourceQueries.class));
             assertNotNull(context.getBean(TableOperationService.class));
+            assertNotNull(context.getBean(AuthorizationSeedService.class));
             assertNotNull(context.getBean(ResourceCleanupService.class));
             assertNotNull(context.getBean(TableReadinessService.class));
             assertNotNull(context.getBean(DatasourceTableMetadataService.class));

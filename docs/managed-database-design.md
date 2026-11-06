@@ -24,15 +24,16 @@ datasourceKey 通过时间戳与随机串计算 SHA-256 后截取生成，由数
 
 挂载由 devagent-studio.list 提供，Schema 从 db-name 读取，不在管理表重复保存。新资源按 CREATED 表数、有效资源数、datasourceId 数值依次选择可用挂载。扩容只影响后续新资源，已有资源不重新分配。
 
-只维护三张管理表，唯一 DDL 来源为 [建表脚本](../src/main/resources/db/manual/managed-database-schema.sql)：
+管理库维护四张表，完整 DDL 见 [建表脚本](../src/main/resources/db/manual/managed-database-schema.sql)：
 
 | 表 | 职责与状态 |
 | --- | --- |
 | md_datasource_resource | datasourceKey、app_key/app_name、固定挂载和当前写操作占用；REGISTERED / RELEASED |
 | md_datasource_table | 精确表归属及最近确认的物理状态；REGISTERED / CREATED / DROPPED |
 | md_database_operation | 一次 CREATE、REBUILD、DROP 或 RELEASE 的执行内容、逐步证据和终态；RUNNING / SUCCEEDED / FAILED / UNKNOWN |
+| md_data_operation | 权限 Seed 的独立幂等审计与安全结果；RUNNING / SUCCEEDED / FAILED / UNKNOWN |
 
-三表通过 datasource_key 关联，表位置按 datasource_id + table_name 唯一。目录外的表不自动认领，保留记录不释放唯一占用。CREATED 只表示最近确认建成，不能代替当前结构检查。
+管理表通过 datasource_key 关联，表位置按 datasource_id + table_name 唯一。目录外的表不自动认领，保留记录不释放唯一占用。CREATED 只表示最近确认建成，不能代替当前结构检查。
 
 datasource_id 使用 TINYINT UNSIGNED，部署使用 1～255 的编号，Java 使用 long/Long，接口使用数字类型。主键、操作 ID 和 active_operation_id 保持 BIGINT。管理表使用 InnoDB、utf8mb4、utf8mb4_bin。
 
@@ -72,6 +73,9 @@ flowchart LR
 | POST {前缀}/table-operations | CREATE 或 REBUILD，受理返回 HTTP 202 和 operationId |
 | GET {前缀}/table-operations/{operationId} | 查询原操作详情 |
 | GET {前缀}/table-operations | 查询最近操作历史 |
+| POST {前缀}/data-operations/batch | 后端受控权限 Seed，受理返回 HTTP 202 |
+| GET {前缀}/data-operations/{operationId} | 查询 Seed 状态及安全摘要 |
+| GET {前缀}/data-operations/by-key/{idempotencyKey} | 按幂等键只读查询原 Seed 操作 |
 | POST {前缀}/tables/check | 提交当前完整 SQL 清单，返回本次结构检查结果 |
 | GET {前缀}/tables | 查询当前资源已建成的真实表 |
 | GET {前缀}/tables/{tableName}/columns | 查询真实字段与表注释 |
@@ -116,6 +120,10 @@ REBUILD 必须明确授权数据丢失。Studio 先停止相关调试，再确�
 结构检查比较当前 SQL 的列、类型、可空、默认值、自增、主键、索引、外键和显式表选项，不按文本相等判断。ready 是本次只读结果，不落为永久同步状态。缺表、结构不一致、归属冲突、占用或读取失败都会阻止启动；历史操作成功不能替代此检查。
 
 结果未知时保留 UNKNOWN 与占用，不自动重放 SQL。申请 recovery 只能阻止尚未准入的后续步骤，不能证明在途 SQL 已结束，也不会恢复数据。人工处理应先停止相关实例，核对 SQL 已结束和全部实际表状态，再在同一管理事务内保存审计、修正目录与原操作，并仅释放原操作的占用。完整流程见 [未完成操作人工处置](operation-recovery-runbook.md)，管理库受控工具见 [人工结束操作 SQL](../src/main/resources/db/manual/table-operation-abandon.sql)。工具覆盖四种动作及空资源 RELEASE，默认预演回滚，正式提交必须显式确认；原 SQL、步骤和执行时间保留，人工审计使用独立 resolvedAt。人工放弃 RELEASE 只结束原操作、释放原占用，资源仍为 REGISTERED；后续正常清理才完成资源回收。重复处置不改原审计、不释放后来操作的占用。
+
+## 首次权限 Seed
+
+Builtin Schema Bootstrap 建成四张权限表后，XCodeAgent 后端可通过 [权限 Seed 合同](managed-database-authorization-seed-api.md) 提交一次受控批量 INSERT。Seed 与建表、重建和清理共享资源占用，使用独立审计表。四表在同一业务库事务中插入缺失行并回读，确认提交后记录成功。结果不明时保留占用且禁止自动重放。
 
 ## 元数据、调试数据和连接
 

@@ -1,10 +1,11 @@
 -- 内置数据源资源服务：管理表初始化脚本。
--- 在预先创建的管理库中手工执行，包含以下三张表：
+-- 在预先创建的管理库中手工执行，包含以下四张表：
 -- md_datasource_resource：逻辑数据源资源及固定挂载。
 -- md_datasource_table：资源拥有的精确物理表目录。
 -- md_database_operation：建表、重建、删除和资源回收的执行记录。
+-- md_data_operation：独立权限 Seed 执行记录。
 -- datasource_key 为逻辑资源标识；datasource_id 为物理挂载编号，两者不能混用。
--- 本脚本在管理库中创建三张管理表，不操作业务挂载库。
+-- 本脚本在管理库中创建四张管理表，不操作业务挂载库。
 -- 所有 bigint 主键由服务生成，业务表名总长度限制仍为 64 字符。
 
 -- 由部署流程在管理库手工执行；应用不自动初始化，不在用户挂载库执行。
@@ -91,3 +92,23 @@ CREATE TABLE `md_database_operation` (
   KEY `idx_md_database_operation_history` (`datasource_key`, `created_at`),
   KEY `idx_md_database_operation_status` (`status`, `created_at`, `id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='数据库执行记录表';
+
+-- 独立的受控数据操作记录，由部署手工创建。
+-- payload_json 含 Subject，仅 SaaS 服务与授权审计人员可访问。
+CREATE TABLE `md_data_operation` (
+  `id` bigint NOT NULL COMMENT '服务生成的操作 ID',
+  `datasource_key` varchar(64) COLLATE utf8mb4_bin NOT NULL COMMENT '逻辑数据源标识',
+  `datasource_id` tinyint unsigned NOT NULL COMMENT '固定挂载 ID',
+  `purpose` varchar(32) COLLATE utf8mb4_bin NOT NULL COMMENT '受控 Seed 用途',
+  `idempotency_key` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '请求幂等键',
+  `request_fingerprint` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范载荷 SHA-256',
+  `status` varchar(24) COLLATE utf8mb4_bin NOT NULL DEFAULT 'RUNNING' COMMENT '执行状态',
+  `payload_json` json NOT NULL COMMENT '受限内部执行载荷',
+  `result_json` json DEFAULT NULL COMMENT '安全结果摘要',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '受理时间',
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  `completed_at` timestamp NULL DEFAULT NULL COMMENT '记录终态或未知的时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_md_data_operation_idempotency` (`datasource_key`, `idempotency_key`),
+  KEY `idx_md_data_operation_status` (`status`, `created_at`, `id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='受控数据操作审计表';
