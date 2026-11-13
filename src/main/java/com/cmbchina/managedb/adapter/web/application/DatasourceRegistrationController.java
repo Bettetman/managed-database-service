@@ -19,10 +19,9 @@ public class DatasourceRegistrationController {
     private final DatasourceRegistration registration;
 
     /** 接受应用关联信息，事务提交后仍返回原资源绑定合同。 */
-    @PostMapping(value = "/managed-database/datasources",
-            consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    @PostMapping(value = "/managed-database/datasources", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<DatasourceResourceView> register(@RequestBody JsonNode request) {
         DatasourceRegistrationRequest input = DatasourceRegistrationRequest.parse(request);
-        return ResponseEntity.status(HttpStatus.CREATED).body(registration.register(input.getAppKey(), input.getAppName()));
+        return ResponseEntity.status(HttpStatus.OK).body(registration.register(input.getAppKey(), input.getAppName()));
     }
 }

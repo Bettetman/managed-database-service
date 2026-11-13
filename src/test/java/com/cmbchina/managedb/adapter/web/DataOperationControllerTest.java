@@ -18,6 +18,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+
 import static com.cmbchina.managedb.AuthorizationSeedFixture.*;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
@@ -104,15 +105,33 @@ class DataOperationControllerTest {
         verifyNoInteractions(service);
     }
 
-    /** 明确区分同键冲突与未查到原操作。 */
+    /** 同键冲突返回 409，两种查询未命中均返回 404 和明确错误码。 */
     @Test
     void returnsConflictAndMissingLookup() throws Exception {
         when(service.submit(eq(IDEMPOTENCY_KEY), any())).thenThrow(new BizException(ResourceErrorCode.IDEMPOTENCY_CONFLICT));
         when(service.byKey(KEY, IDEMPOTENCY_KEY)).thenThrow(new BizException(ResourceErrorCode.RESOURCE_NOT_FOUND));
+        when(service.detail(KEY, 12)).thenThrow(new BizException(ResourceErrorCode.RESOURCE_NOT_FOUND));
         mvc.perform(submit(json(KEY))).andExpect(status().isConflict())
                 .andExpect(jsonPath("$.returnCode").value("IDEMPOTENCY_CONFLICT"));
         String lookup = BASE + "/by-key/" + IDEMPOTENCY_KEY;
-        mvc.perform(authorize(get(lookup), lookup)).andExpect(status().isNotFound());
+        mvc.perform(authorize(get(lookup), lookup)).andExpect(status().isNotFound())
+                .andExpect(content().json("{\"returnCode\":\"RESOURCE_NOT_FOUND\",\"errorMsg\":\"应用或执行记录不存在\",\"body\":{}}", true));
+        String detail = BASE + "/12";
+        mvc.perform(authorize(get(detail), detail)).andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.returnCode").value("RESOURCE_NOT_FOUND"));
+    }
+
+    /** 查询故障和参数错误必须保留错误响应，不能被包装为空结果。 */
+    @Test
+    void preservesLookupErrors() throws Exception {
+        when(service.byKey(KEY, IDEMPOTENCY_KEY))
+                .thenThrow(new BizException(ResourceErrorCode.INTERNAL_ERROR))
+                .thenThrow(new BizException(ResourceErrorCode.INVALID_ARGUMENT));
+        String lookup = BASE + "/by-key/" + IDEMPOTENCY_KEY;
+        mvc.perform(authorize(get(lookup), lookup)).andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.returnCode").value("INTERNAL_ERROR"));
+        mvc.perform(authorize(get(lookup), lookup)).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.returnCode").value("INVALID_ARGUMENT"));
     }
 
     /** 指纹对属性顺序稳定，对业务内容变化敏感。 */

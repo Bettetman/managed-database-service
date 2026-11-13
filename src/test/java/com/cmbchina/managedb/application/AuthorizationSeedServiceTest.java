@@ -22,6 +22,28 @@ class AuthorizationSeedServiceTest {
     private final AuthorizationSeedPayload payload = parse(KEY, json(KEY));
     private final DataOperation running = new DataOperation(12, KEY, 1, payload.getFingerprint(), DataOperation.Result.running());
 
+    /** 未命中抛出记录不存在异常，查询过程不会触发目标库或任务调度。 */
+    @Test
+    void lookupRejectsMissingOrReturnsOriginalSummary() {
+        when(repository.byKey(KEY, IDEMPOTENCY_KEY)).thenReturn(Optional.empty(), Optional.of(running));
+        assertEquals(ResourceErrorCode.RESOURCE_NOT_FOUND,
+                assertThrows(BizException.class, () -> service.byKey(KEY, IDEMPOTENCY_KEY)).getErrorCode());
+        assertEquals("12", service.byKey(KEY, IDEMPOTENCY_KEY).getOperationId());
+        verifyNoInteractions(database, dispatcher);
+    }
+
+    /** 非法幂等键在查询前拒绝，管理库故障不能当作未命中。 */
+    @Test
+    void lookupPreservesValidationAndRepositoryFailure() {
+        assertEquals(ResourceErrorCode.INVALID_ARGUMENT,
+                assertThrows(BizException.class, () -> service.byKey(KEY, "invalid")).getErrorCode());
+        verifyNoInteractions(repository);
+        when(repository.byKey(KEY, IDEMPOTENCY_KEY)).thenThrow(new BizException(ResourceErrorCode.INTERNAL_ERROR));
+        assertEquals(ResourceErrorCode.INTERNAL_ERROR,
+                assertThrows(BizException.class, () -> service.byKey(KEY, IDEMPOTENCY_KEY)).getErrorCode());
+        verifyNoInteractions(database, dispatcher);
+    }
+
     /** 已有记录绕过预检与执行，进程重启后仍不会调度。 */
     @Test
     void neverSchedulesExistingRunningOrUnknown() {

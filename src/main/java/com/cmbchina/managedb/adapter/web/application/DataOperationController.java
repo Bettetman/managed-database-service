@@ -3,11 +3,11 @@ package com.cmbchina.managedb.adapter.web.application;
 import com.cmbchina.managedb.adapter.web.request.AuthorizationSeedRequest;
 import com.cmbchina.managedb.application.AuthorizationSeedService;
 import com.cmbchina.managedb.application.view.DataOperationView;
+import com.cmbchina.managedb.common.response.ResponseEntity;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
@@ -24,16 +24,17 @@ public class DataOperationController {
 
     /** 202 表示受理或返回原受理记录；前置鉴权在读取请求体之前执行。 */
     @PostMapping(value = "/batch", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<DataOperationView.Receipt> submit(@PathVariable String datasourceKey,
+    public org.springframework.http.ResponseEntity<DataOperationView.Receipt> submit(@PathVariable String datasourceKey,
                                                            HttpServletRequest request) throws IOException {
         AuthorizationSeedRequest input = AuthorizationSeedRequest.parse(datasourceKey, request.getInputStream(), mapper);
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(service.submit(input.getIdempotencyKey(), input.getPayload()));
+        return org.springframework.http.ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(service.submit(input.getIdempotencyKey(), input.getPayload()));
     }
 
-    /** 专用幂等查找路由，完全只读。 */
+    /** 专用幂等查找路由，完全只读，未找到时由异常处理器返回 404。 */
     @GetMapping("/by-key/{idempotencyKey}")
-    public DataOperationView byKey(@PathVariable String datasourceKey, @PathVariable String idempotencyKey) {
-        return service.byKey(datasourceKey, idempotencyKey);
+    public ResponseEntity<DataOperationView> byKey(@PathVariable String datasourceKey, @PathVariable String idempotencyKey) {
+        return ResponseEntity.success(service.byKey(datasourceKey, idempotencyKey));
     }
 
     /** 读取指定资源下的安全状态摘要。 */

@@ -17,7 +17,7 @@
 | --- | --- | --- |
 | POST | `/data-operations/batch` | 202，回执包含字符串 `operationId`、`status`、`purpose` |
 | GET | `/data-operations/{operationId}` | 200，安全摘要 |
-| GET | `/data-operations/by-key/{idempotencyKey}` | 200，原操作的安全摘要。不存在时返回 404 |
+| GET | `/data-operations/by-key/{idempotencyKey}` | 200，原操作的安全摘要。未查到时返回 404、RESOURCE_NOT_FOUND，body 为空对象 `{}` |
 
 请求接受 UTF-8 JSON，最多 256 KiB，固定四张表及以下顺序。表名均由 `{datasourceKey}_` 加表后缀组成。
 
@@ -83,7 +83,7 @@ JSON 属性顺序、转义拼写和排版空白不影响指纹。行顺序变化
 
 ## 响应丢失和人工处置
 
-1. 响应丢失时使用原幂等键 GET，或按原 operationId 查询。404 只表示本次未查到记录，调用方应核对原请求及当前系统状态。轮询不执行 DML。
+1. 响应丢失时使用原幂等键 GET，或按原 operationId 查询。两种查询未命中均返回 HTTP 404、`returnCode=RESOURCE_NOT_FOUND`、`errorMsg=应用或执行记录不存在`、`body={}`，只表示本次未查到记录，不能证明原请求未执行；调用方应核对原请求及当前系统状态。参数错误和查询故障保留各自错误，不转换为记录不存在。轮询不执行 DML。
 2. 长时间 RUNNING 或 UNKNOWN 时，先暂停相关提交，确认承接受理的 SaaS 实例及业务库连接均已结束，阻止其他写入。在授权环境只读核对原记录、管理库占用、固定挂载上的自然键和不可变约束。避免将载荷、Subject 或数据库连接信息复制到日志、工单或前端。
 3. 在运维审计中记录操作 ID、证据、操作者和处置时间。业务记录已经存在不足以证明原事务提交，也无法区分本次创建数与已有数。无法证明原执行结果时，保留 UNKNOWN 并转人工决策。确定仍有在途任务时保留占用。
 4. 人工确认无在途写入、决定结束处置后，在一个短管理事务中先锁定 `md_datasource_resource` 原资源行，再锁定 `md_data_operation` 原操作。核对 datasourceId、原 operationId、当前占用和 RUNNING/UNKNOWN 状态。记录有证据支持的状态及安全结果，保留原载荷、幂等键和指纹。仅用 `datasource_key` 与原 `active_operation_id` 双条件释放，条件更新行数不等于一则回滚。若结果仍不明，原记录保留 UNKNOWN，人工释放占用需在受控审计中单独登记。处置流程禁止重放原操作。

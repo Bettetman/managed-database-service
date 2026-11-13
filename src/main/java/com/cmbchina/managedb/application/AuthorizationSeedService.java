@@ -103,7 +103,7 @@ public class AuthorizationSeedService {
         return new DataOperationView(requireFound(repository.detail(new DatasourceKey(datasourceKey).getValue(), operationId)));
     }
 
-    /** 幂等查找永远只读，未找到明确返回 404。 */
+    /** 幂等查找永远只读，未找到时抛出明确的记录不存在异常。 */
     public DataOperationView byKey(String datasourceKey, String idempotencyKey) {
         return new DataOperationView(requireFound(repository.byKey(new DatasourceKey(datasourceKey).getValue(),
                 AuthorizationSeedPayload.requireIdempotencyKey(idempotencyKey))));
