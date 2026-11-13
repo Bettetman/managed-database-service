@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /** 唯一支持的 Seed 数据及固定写入白名单。 */
 @Getter
@@ -21,6 +22,8 @@ public final class AuthorizationSeedPayload {
     private static final String ADMIN = "SYSTEM_ADMIN";
     private static final String SYSTEM_RESOURCE = "system_authorization_management";
     private static final String SYSTEM_REF = "system:authorization_management";
+    private static final Pattern PAGE_KEY = Pattern.compile("[a-z][a-z0-9]*(?:_[a-z0-9]+)*");
+    private static final Pattern ACTION_REF = Pattern.compile("action:[a-z][a-z0-9_]*:[a-z][a-z0-9_]*");
 
     /** 长度为零代表整数；列顺序用于构造固定 SQL。 */
     @Getter
@@ -110,7 +113,10 @@ public final class AuthorizationSeedPayload {
                 throw invalid();
             }
             Map<String, Object> canonical = new TreeMap<>();
-            table.columns.forEach((name, size) -> canonical.put(name, validateValue(row.get(name), size)));
+            table.columns.forEach((name, size) -> {
+                boolean allowEmpty = table == Table.RESOURCE && "description".equals(name);
+                canonical.put(name, validateValue(row.get(name), size, allowEmpty));
+            });
             List<Object> key = new ArrayList<>();
             table.naturalKey.forEach(name -> key.add(canonical.get(name)));
             if (!unique.add(key)) {
@@ -128,8 +134,8 @@ public final class AuthorizationSeedPayload {
         return Collections.unmodifiableList(result);
     }
 
-    /** 只接受规范整数和有效 Unicode 字符串，按数据库字符数限制长度。 */
-    private static Object validateValue(Object value, int size) {
+    /** 只接受规范整数和有效 Unicode 字符串，仅指定列可保留空串。 */
+    private static Object validateValue(Object value, int size, boolean allowEmpty) {
         if (size == 0 && value instanceof Integer) {
             return value;
         }
@@ -137,8 +143,10 @@ public final class AuthorizationSeedPayload {
             throw invalid();
         }
         String text = (String) value;
-        int limit = size;
-        if (text.isEmpty() || !text.equals(text.trim()) || text.codePointCount(0, text.length()) > limit
+        if (text.isEmpty() && allowEmpty) {
+            return text;
+        }
+        if (text.isEmpty() || !text.equals(text.trim()) || text.codePointCount(0, text.length()) > size
                 || text.codePoints().anyMatch(c -> Character.isISOControl(c) || (c >= 0xD800 && c <= 0xDFFF))
                 || text.codePoints().allMatch(c -> Character.isWhitespace(c) || Character.isSpaceChar(c))) {
             throw invalid();
@@ -164,7 +172,7 @@ public final class AuthorizationSeedPayload {
         }
     }
 
-    /** 唯一系统资源使用固定引用，其余引用的前缀必须与资源类型一致。 */
+    /** 系统引用固定；页面绑定自身资源键，操作按 action 引用校验且保留原值。 */
     private static void validateResource(Map<String, Object> row) {
         if (SYSTEM_RESOURCE.equals(row.get("key"))) {
             if (!"system".equals(row.get("origin")) || !"system".equals(row.get("type"))
@@ -173,11 +181,19 @@ public final class AuthorizationSeedPayload {
             }
             return;
         }
-        String type = (String) row.get("type");
-        if (!"business".equals(row.get("origin")) || !("page".equals(type) || "operation".equals(type))
-                || !((String) row.get("target_resource_ref")).matches(type + ":[A-Za-z0-9_-]+(?:[.:/][A-Za-z0-9_-]+)*")) {
+        if (!"business".equals(row.get("origin"))) {
             throw invalid();
         }
+        String type = (String) row.get("type");
+        String key = (String) row.get("key");
+        String ref = (String) row.get("target_resource_ref");
+        if ("page".equals(type) && PAGE_KEY.matcher(key).matches() && ("page:" + key).equals(ref)) {
+            return;
+        }
+        if ("operation".equals(type) && ACTION_REF.matcher(ref).matches()) {
+            return;
+        }
+        throw invalid();
     }
 
     /** 使用长度前缀编码保持跨客户端一致，无需依赖 JSON 库的转义行为。 */
